@@ -2,31 +2,37 @@
     "config": {
         "step": {
             "user": {
-                "title": "Configuración de Spock EMS (Modbus)",
-                "description": "Introduce los detalles de tu API de Spock y la conexión Modbus TCP de tu inversor.",
+                "title": "Configuración de Spock EMS (SMA)",
+                "description": "Introduce los detalles de tu API de Spock y las IPs de tus inversores SMA.",
                 "data": {
                     "api_token": "Spock EMS API Token",
                     "plant_id": "Spock EMS ID de Planta",
-                    "modbus_ip": "Dirección IP del Inversor (Modbus)",
-                    "modbus_port": "Puerto Modbus TCP",
-                    "modbus_slave": "ID de Esclavo (Slave ID) Modbus"
+                    "battery_ip": "IP Inversor de Batería (Ej. Sunny Boy Storage)",
+                    "battery_port": "Puerto Modbus Batería",
+                    "battery_slave": "ID Esclavo Batería",
+                    "pv_ip": "IP Inversor FV (Ej. Sunny Boy)",
+                    "pv_port": "Puerto Modbus FV",
+                    "pv_slave": "ID Esclavo FV"
                 }
             }
         },
         "abort": {
-            "already_configured": "Esta combinación de IP e ID de Planta ya está configurada."
+            "already_configured": "Esta combinación de IP de Batería e ID de Planta ya está configurada."
         }
     },
     "options": {
         "step": {
             "init": {
-                "title": "Opciones de Spock EMS (Modbus)",
+                "title": "Opciones de Spock EMS (SMA)",
                 "data": {
                     "api_token": "Spock EMS API Token",
                     "plant_id": "Spock EMS ID de Planta",
-                    "modbus_ip": "Dirección IP del Inversor",
-                    "modbus_port": "Puerto Modbus TCP",
-                    "modbus_slave": "ID de Esclavo (Slave ID) Modbus"
+                    "battery_ip": "IP Inversor de Batería",
+                    "battery_port": "Puerto Modbus Batería",
+                    "battery_slave": "ID Esclavo Batería",
+                    "pv_ip": "IP Inversor FV",
+                    "pv_port": "Puerto Modbus FV",
+                    "pv_slave": "ID Esclavo FV"
                 }
             }
         }
@@ -34,7 +40,7 @@
     "entity": {
         "switch": {
             "polling_enabled": {
-                "name": "Habilitar Pooling Modbus/API"
+                "name": "Habilitar Sondeo Modbus/API"
             }
         }
     }
