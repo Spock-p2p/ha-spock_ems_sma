@@ -13,10 +13,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 # --- Imports de Modbus (Corregidos para Pymodbus v3) ---
 from pymodbus.client import ModbusTcpClient
-from pymodbus.endian import Endian  # <-- CAMBIO: Estaba en 'constants'
-from pymodbus.payload_decoder import BinaryPayloadDecoder # <-- CAMBIO: Estaba en 'payload'
-from pymodbus.payload_builder import BinaryPayloadBuilder # <-- CAMBIO: Estaba en 'payload'
-# --- FIN DE CAMBIOS ---
+from pymodbus.endian import Endian
+from pymodbus.payload_decoder import BinaryPayloadDecoder
+from pymodbus.payload_builder import BinaryPayloadBuilder
 
 from .const import (
     DOMAIN,
@@ -43,7 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Configura la integración desde la entrada de configuración."""
+    # Configura la integración desde la entrada de configuración.
     
     coordinator = SpockEnergyCoordinator(hass, entry) 
 
@@ -63,7 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Descarga la entrada de configuración."""
+    # Descarga la entrada de configuración.
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
@@ -73,15 +72,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Recarga la entrada de configuración al modificar opciones."""
+    # Recarga la entrada de configuración al modificar opciones.
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator que gestiona el ciclo de API unificado."""
+    # Coordinator que gestiona el ciclo de API unificado.
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        """Inicializa el coordinador."""
+        # Inicializa el coordinador.
         self.config_entry = entry
         self.config = {**entry.data, **entry.options}
         self.api_token: str = self.config[CONF_API_TOKEN]
@@ -105,10 +104,9 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     def _read_sma_telemetry(self) -> dict[str, str] | None:
-        """
-        [FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA.
-        Devuelve 'None' si la lectura falla, en lugar de lanzar una excepción.
-        """
+        # [FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA.
+        # Devuelve 'None' si la lectura falla, en lugar de lanzar una excepción.
+        
         _LOGGER.debug("Iniciando lectura Modbus SMA...")
         
         battery_client = ModbusTcpClient(
@@ -208,10 +206,8 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 
     def _write_modbus_commands(self, commands: dict[str, Any]) -> None:
-        """
-        [FUNCIÓN SÍNCRONA] Escribe los comandos de la API en el inversor.
-        ADVERTENCIA: SMA NO USA MODBUS PARA ESCRITURA DE BATERÍA.
-        """
+        # [FUNCIÓN SÍNCRONA] Escribe los comandos de la API en el inversor.
+        # ADVERTENCIA: SMA NO USA MODBUS PARA ESCRITURA DE BATERÍA.
         _LOGGER.warning(
             "Se ha llamado a la función de escritura Modbus para SMA, "
             "pero SMA no soporta control de batería vía Modbus TCP. "
@@ -221,9 +217,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """
-        Ciclo de actualización unificado (Versión Modbus)
-        """
+        # Ciclo de actualización unificado (Versión Modbus)
         
         entry_id = self.config_entry.entry_id
         is_enabled = self.hass.data[DOMAIN].get(entry_id, {}).get("is_enabled", True)
