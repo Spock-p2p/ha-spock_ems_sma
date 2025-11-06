@@ -232,14 +232,10 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Conectando a Inversor Batería: %s", self.battery_ip)
             battery_client.connect()
 
-            bat_regs = _mb_read(
-                battery_client.read_holding_registers,
-                SMA_REG_BAT_POWER,
-                7,
-                self.battery_slave,
+            kind_bat, addr_bat, bat_regs = _try_read_register_block(
+                battery_client, SMA_REG_BAT_POWER, 7, self.battery_slave
             )
-            if hasattr(bat_regs, "isError") and bat_regs.isError():
-                raise ConnectionError(f"Error al leer registros de batería: {bat_regs}")
+
 
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
                 bat_regs.registers, byteorder=Endian.Big  # Usando Endian del shim
@@ -250,14 +246,10 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             decoder_bat.skip_bytes(4)
             bat_capacity = decoder_bat.decode_32bit_uint()
 
-            grid_regs = _mb_read(
-                battery_client.read_holding_registers,
-                SMA_REG_GRID_POWER,
-                2,
-                self.battery_slave,
+            kind_grid, addr_grid, grid_regs = _try_read_register_block(
+                battery_client, SMA_REG_GRID_POWER, 2, self.battery_slave
             )
-            if hasattr(grid_regs, "isError") and grid_regs.isError():
-                raise ConnectionError(f"Error al leer registros de red: {grid_regs}")
+
 
             decoder_grid = BinaryPayloadDecoder.fromRegisters(
                 grid_regs.registers, byteorder=Endian.Big
@@ -275,14 +267,9 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Conectando a Inversor FV: %s", self.pv_ip)
             pv_client.connect()
 
-            pv_regs = _mb_read(
-                pv_client.read_holding_registers,
-                SMA_REG_PV_POWER,
-                2,
-                self.pv_slave,
+            kind_pv, addr_pv, pv_regs = _try_read_register_block(
+                pv_client, SMA_REG_PV_POWER, 2, self.pv_slave
             )
-            if hasattr(pv_regs, "isError") and pv_regs.isError():
-                raise ConnectionError(f"Error al leer registros FV: {pv_regs}")
 
             decoder_pv = BinaryPayloadDecoder.fromRegisters(
                 pv_regs.registers, byteorder=Endian.Big
