@@ -1,4 +1,4 @@
-"""Config flow para Spock EMS Modbus."""
+"""Config flow para Spock EMS SMA."""
 from __future__ import annotations
 
 import logging
@@ -14,9 +14,12 @@ from .const import (
     DOMAIN,
     CONF_API_TOKEN,
     CONF_PLANT_ID,
-    CONF_MODBUS_IP,
-    CONF_MODBUS_PORT,
-    CONF_MODBUS_SLAVE,
+    CONF_BATTERY_IP,
+    CONF_BATTERY_PORT,
+    CONF_BATTERY_SLAVE,
+    CONF_PV_IP,
+    CONF_PV_PORT,
+    CONF_PV_SLAVE,
     DEFAULT_MODBUS_PORT,
     DEFAULT_MODBUS_SLAVE,
 )
@@ -24,7 +27,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class SpockEmsModbusConfigFlow(ConfigFlow, domain=DOMAIN):
+class SpockEmsSmaConfigFlow(ConfigFlow, domain=DOMAIN):
     """Maneja el flujo de configuración."""
 
     VERSION = 1
@@ -33,16 +36,12 @@ class SpockEmsModbusConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Paso inicial de configuración."""
-        errors: dict[str, str] = {}
         if user_input is not None:
-            
-            # (No se valida la API aquí, se validará en el primer ciclo)
-            
-            await self.async_set_unique_id(f"{user_input[CONF_MODBUS_IP]}-{user_input[CONF_PLANT_ID]}")
+            await self.async_set_unique_id(f"{user_input[CONF_BATTERY_IP]}-{user_input[CONF_PLANT_ID]}")
             self._abort_if_unique_id_configured()
 
             return self.async_create_entry(
-                title=f"Spock EMS Modbus ({user_input[CONF_MODBUS_IP]})",
+                title=f"Spock EMS SMA ({user_input[CONF_BATTERY_IP]})",
                 data=user_input,
             )
 
@@ -50,14 +49,19 @@ class SpockEmsModbusConfigFlow(ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_API_TOKEN): str,
                 vol.Required(CONF_PLANT_ID): int,
-                vol.Required(CONF_MODBUS_IP): str,
-                vol.Optional(CONF_MODBUS_PORT, default=DEFAULT_MODBUS_PORT): int,
-                vol.Optional(CONF_MODBUS_SLAVE, default=DEFAULT_MODBUS_SLAVE): int,
+                vol.Required(CONF_BATTERY_IP): str,
+                vol.Optional(CONF_BATTERY_PORT, default=DEFAULT_MODBUS_PORT): int,
+                vol.Optional(CONF_BATTERY_SLAVE, default=DEFAULT_MODBUS_SLAVE): int,
+                # --- CAMBIO: Ahora es obligatorio ---
+                vol.Required(CONF_PV_IP): str, 
+                # --- FIN DEL CAMBIO ---
+                vol.Optional(CONF_PV_PORT, default=DEFAULT_MODBUS_PORT): int,
+                vol.Optional(CONF_PV_SLAVE, default=DEFAULT_MODBUS_SLAVE): int,
             }
         )
 
         return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+            step_id="user", data_schema=STEP_USER_DATA_SCHEMA
         )
 
     @staticmethod
@@ -82,8 +86,7 @@ class OptionsFlowHandler(OptionsFlow):
         """Maneja el paso inicial del flujo de opciones."""
         
         if user_input is not None:
-            # Actualiza el unique_id si la IP o Plant ID cambian
-            new_unique_id = f"{user_input[CONF_MODBUS_IP]}-{user_input[CONF_PLANT_ID]}"
+            new_unique_id = f"{user_input[CONF_BATTERY_IP]}-{user_input[CONF_PLANT_ID]}"
             if self.config_entry.unique_id != new_unique_id:
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, unique_id=new_unique_id
@@ -103,16 +106,30 @@ class OptionsFlowHandler(OptionsFlow):
                     default=current_config.get(CONF_PLANT_ID),
                 ): int,
                 vol.Required(
-                    CONF_MODBUS_IP,
-                    default=current_config.get(CONF_MODBUS_IP),
+                    CONF_BATTERY_IP,
+                    default=current_config.get(CONF_BATTERY_IP),
                 ): str,
                 vol.Optional(
-                    CONF_MODBUS_PORT,
-                    default=current_config.get(CONF_MODBUS_PORT, DEFAULT_MODBUS_PORT)
+                    CONF_BATTERY_PORT,
+                    default=current_config.get(CONF_BATTERY_PORT, DEFAULT_MODBUS_PORT)
                 ): int,
                 vol.Optional(
-                    CONF_MODBUS_SLAVE,
-                    default=current_config.get(CONF_MODBUS_SLAVE, DEFAULT_MODBUS_SLAVE)
+                    CONF_BATTERY_SLAVE,
+                    default=current_config.get(CONF_BATTERY_SLAVE, DEFAULT_MODBUS_SLAVE)
+                ): int,
+                # --- CAMBIO: Ahora es obligatorio ---
+                vol.Required(
+                    CONF_PV_IP,
+                    default=current_config.get(CONF_PV_IP) # No necesita default ""
+                ): str,
+                # --- FIN DEL CAMBIO ---
+                vol.Optional(
+                    CONF_PV_PORT,
+                    default=current_config.get(CONF_PV_PORT, DEFAULT_MODBUS_PORT)
+                ): int,
+                vol.Optional(
+                    CONF_PV_SLAVE,
+                    default=current_config.get(CONF_PV_SLAVE, DEFAULT_MODBUS_SLAVE)
                 ): int,
             }
         )
