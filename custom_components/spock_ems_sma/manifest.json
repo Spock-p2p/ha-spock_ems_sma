@@ -8,7 +8,7 @@
     "codeowners": ["@spock-p2p"],
     "requirements": [
         "pymodbus",
-        "pysma-ha"
+        "pysma"
     ],
     "dependencies": [],
     "after_dependencies": []
