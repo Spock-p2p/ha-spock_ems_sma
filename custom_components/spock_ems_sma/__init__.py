@@ -11,11 +11,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-# --- Imports de Modbus (Corregidos para Pymodbus v3) ---
+# --- Imports de Modbus (Corregidos para Pymodbus v3.6+) ---
 from pymodbus.client import ModbusTcpClient
-from pymodbus.endian import Endian
-from pymodbus.payload_decoder import BinaryPayloadDecoder
-from pymodbus.payload_builder import BinaryPayloadBuilder
+# 'Endian' ahora se importa desde 'pymodbus.binary' o 'payload_decoder'
+from pymodbus.payload import BinaryPayloadDecoder
+from pymodbus.payload import BinaryPayloadBuilder
+from pymodbus.utilities import Endian 
+# --- FIN DE CAMBIOS ---
 
 from .const import (
     DOMAIN,
@@ -82,7 +84,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         # Inicializa el coordinador.
         self.config_entry = entry
-        self.config = {**entry.data, **entry.options}
+        self.config = {**self.config_entry.data, **self.config_entry.options}
         self.api_token: str = self.config[CONF_API_TOKEN]
         self.plant_id: int = self.config[CONF_PLANT_ID]
         
@@ -138,7 +140,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise ConnectionError(f"Error al leer registros de batería: {bat_regs}")
 
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
-                bat_regs.registers, byteorder=Endian.BIG 
+                bat_regs.registers, byteorder=Endian.Big # CAMBIO: Endian.Big (v3)
             )
             bat_power = decoder_bat.decode_32bit_int()
             bat_soc = decoder_bat.decode_32bit_uint()
@@ -154,7 +156,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise ConnectionError(f"Error al leer registros de red: {grid_regs}")
             
             decoder_grid = BinaryPayloadDecoder.fromRegisters(
-                grid_regs.registers, byteorder=Endian.BIG
+                grid_regs.registers, byteorder=Endian.Big # CAMBIO: Endian.Big (v3)
             )
             ongrid_power = decoder_grid.decode_32bit_int()
             
@@ -173,7 +175,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise ConnectionError(f"Error al leer registros FV: {pv_regs}")
 
             decoder_pv = BinaryPayloadDecoder.fromRegisters(
-                pv_regs.registers, byteorder=Endian.BIG
+                pv_regs.registers, byteorder=Endian.Big # CAMBIO: Endian.Big (v3)
             )
             pv_power = decoder_pv.decode_32bit_int()
             _LOGGER.debug(f"Datos FV OK: PVPower={pv_power}W")
