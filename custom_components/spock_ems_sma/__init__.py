@@ -263,7 +263,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             battery_client.connect()
 
             kind_bat, addr_bat, bat_regs = _try_read_register_block(
-                battery_client, SMA_REG_BAT_POWER, 7, self.battery_slave
+                battery_client, SMA_REG_BAT_POWER, 8, self.battery_slave
             )
 
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
