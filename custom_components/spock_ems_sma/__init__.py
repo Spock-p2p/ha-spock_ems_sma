@@ -25,8 +25,9 @@ except Exception:
     from .compat_payload import BinaryPayloadDecoder, BinaryPayloadBuilder
 # --- FIN ---
 
-# --- CAMBIOS: Imports añadidos ---
+# --- Extras ---
 import pysma
+
 from .const import (
     DOMAIN,
     API_ENDPOINT,
@@ -43,12 +44,12 @@ from .const import (
     CONF_SHM_PASSWORD,
     DEFAULT_SCAN_INTERVAL_S,
     PLATFORMS,
-    # Registros
-    SMA_REG_BAT_POWER,
-    SMA_REG_BAT_SOC,
-    SMA_REG_BAT_CAPACITY,
-    SMA_REG_GRID_POWER,
-    SMA_REG_PV_POWER,
+    # Registros (Unit 2 - System)
+    SMA_REG_PV_POWER,            # 30775 S32 FIX0 RO
+    SMA_REG_BAT_SOC,             # 30845 U32 FIX0 RO
+    SMA_REG_GRID_POWER,          # 31249 S32 FIX0 RO
+    SMA_REG_BAT_CHARGE_W,        # 31393 U32 FIX0 RO
+    SMA_REG_BAT_DISCHARGE_W,     # 31395 U32 FIX0 RO
     # Keys
     KEY_BAT_SOC,
     KEY_BAT_POWER,
@@ -59,7 +60,6 @@ from .const import (
     KEY_BAT_DISCHARGE_ALLOWED,
     KEY_TOTAL_GRID_OUTPUT,
 )
-# --- FIN CAMBIOS ---
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,43 +71,34 @@ def _mb_read(method, address: int, count: int, unit_id: int, **kwargs):
     """
     Llama a read_* probando primero unit=, luego slave= y, si el cliente
     no acepta id de unidad, sin él. Nunca usa argumentos posicionales
-    para 'count' ni para la unidad, porque hay builds que los prohíben.
+    para 'count' ni para la unidad.
     """
-    # 1) PyModbus 3.x frecuentes (count kw-only + unit)
     try:
         return method(address, count=count, unit=unit_id, **kwargs)
     except TypeError:
-        # 2) PyModbus 2.x (count kw-only + slave)
         try:
             return method(address, count=count, slave=unit_id, **kwargs)
         except TypeError:
-            # 3) Algunos clientes ignoran el id de unidad: probar sin él
             return method(address, count=count, **kwargs)
 
 
 def _mb_write_single(method, address: int, value: int, unit_id: int, **kwargs):
-    # 1) unit=
     try:
         return method(address, value=value, unit=unit_id, **kwargs)
     except TypeError:
-        # 2) slave=
         try:
             return method(address, value=value, slave=unit_id, **kwargs)
         except TypeError:
-            # 3) sin id de unidad
             return method(address, value=value, **kwargs)
 
 
 def _mb_write_multi(method, address: int, values, unit_id: int, **kwargs):
-    # 1) unit=
     try:
         return method(address, values=values, unit=unit_id, **kwargs)
     except TypeError:
-        # 2) slave=
         try:
             return method(address, values=values, slave=unit_id, **kwargs)
         except TypeError:
-            # 3) sin id de unidad
             return method(address, values=values, **kwargs)
 
 
@@ -121,12 +112,12 @@ def _is_all_ffff(resp) -> bool:
 def _try_read_register_block(client, reg: int, count: int, unit_id: int):
     """
     Busca una lectura válida probando:
-      - Unit IDs: [unit_id, 3, 126, 1]
+      - Unit IDs: [unit_id, 126, 3, 2, 1, 10]
       - Función/offset: holding[40001,40000], input[30001,30000]
     Descarta respuestas con registers = [0xFFFF, ...].
     Devuelve (kind, addr, unit_used, resp)
     """
-    unit_candidates = []
+    unit_candidates: list[int] = []
     for u in (unit_id, 126, 3, 2, 1, 10):
         if u is not None and u not in unit_candidates:
             unit_candidates.append(u)
@@ -192,7 +183,7 @@ def _try_read_register_block(client, reg: int, count: int, unit_id: int):
     )
 
 
-# --- Normalización de valores SMA ---
+# --- Normalización de valores SMA (NaN/Inválidos) ---
 INVALID_16 = {0xFFFF}
 INVALID_32U = {0xFFFFFFFF, 0x80000000}
 INVALID_32S = {-1, -2147483648}
@@ -246,6 +237,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         # Inicializa el coordinador.
+        self.hass = hass
         self.config_entry = entry
         self.config = {**entry.data, **entry.options}
         self.api_token: str = self.config[CONF_API_TOKEN]
@@ -259,7 +251,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.pv_port: int = self.config[CONF_PV_PORT]
         self.pv_slave: int = self.config[CONF_PV_SLAVE]
 
-        # --- Config SHM ---
+        # Config SHM / pysma (opcional)
         self.shm_ip: str | None = self.config.get(CONF_SHM_IP)
         self.shm_group: str | None = self.config.get(CONF_SHM_GROUP)
         self.shm_password: str | None = self.config.get(CONF_SHM_PASSWORD)
@@ -275,7 +267,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # --- Lectura Modbus: devuelve NÚMEROS ---
     def _read_sma_telemetry(self) -> dict[str, Any] | None:
-        """[FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA."""
+        """[FUNCIÓN SÍNCRONA] Lee los registros Modbus (Unit 2: System) del Data Manager / inversor."""
         _LOGGER.debug("Iniciando lectura Modbus SMA...")
 
         battery_client = ModbusTcpClient(
@@ -290,201 +282,90 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             bat_power = 0
             pv_power = 0
             ongrid_power = 0
-            bat_capacity = 0
+            bat_capacity = 0  # no aparece en ficha; se deja en 0
             bat_charge_allowed = True
             bat_discharge_allowed = True
 
-            # --- 1. Leer Inversor de Batería (Obligatorio) ---
-            _LOGGER.debug("Conectando a Inversor Batería: %s", self.battery_ip)
+            # --- 1) Sistema (Unit 2) en host de batería ---
+            _LOGGER.debug("Conectando a Inversor/Data Manager (batería): %s", self.battery_ip)
             battery_client.connect()
 
-            # --- ESCANEO DIRIGIDO (TEMPORAL) ---
-            try:
-                hit_count = 0
-                for kind in ("input", "holding"):
-                    for base, tag in ((30001, "30001"), (30000, "30000"), (40001, "40001"), (40000, "40000")):
-                        for u in (self.battery_slave, 126, 3, 2, 1, 10):
-                            for logical in range(30800, 30901, 2):  # 30800..30900
-                                addr = logical - base
-                                if addr < 0:
-                                    continue
-                                # usa el wrapper de lectura
-                                if kind == "input":
-                                    resp = _mb_read(battery_client.read_input_registers, address=addr, count=2, unit_id=u)
-                                else:
-                                    resp = _mb_read(battery_client.read_holding_registers, address=addr, count=2, unit_id=u)
-                                if hasattr(resp, "isError") and resp.isError():
-                                    continue
-                                regs = getattr(resp, "registers", None)
-                                if not regs or all((r & 0xFFFF) == 0xFFFF for r in regs):
-                                    continue
-                                _LOGGER.debug("SCAN HIT kind=%s base=%s unit=%s logical=%s addr=%s regs=%s",
-                                              kind, tag, u, logical, addr, regs)
-                                hit_count += 1
-                                if hit_count >= 12:  # no inundar logs
-                                    raise StopIteration
-            except StopIteration:
-                pass
-            except Exception as e:
-                _LOGGER.debug("Escaneo dirigido falló: %s", e)
-            # --- FIN ESCANEO DIRIGIDO ---
-            
-
-            kind_bat, addr_bat, unit_bat, bat_regs = _try_read_register_block(
-                battery_client, SMA_REG_BAT_POWER, 8, self.battery_slave
+            # SOC (U32) @30845
+            _, _, unit_soc, soc_regs = _try_read_register_block(
+                battery_client, SMA_REG_BAT_SOC, 2, 2  # fuerza unit=2
             )
-            _LOGGER.debug(
-                "BAT elegido -> kind=%s addr=%s unit=%s",
-                kind_bat, addr_bat, unit_bat,
+            dec_soc = BinaryPayloadDecoder.fromRegisters(
+                soc_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
+            soc_u32_raw = dec_soc.decode_32bit_uint()
+            soc_u32 = _norm_u32(soc_u32_raw)
+            bat_soc = soc_u32 if (soc_u32 is not None and 0 <= soc_u32 <= 1000) else 0
 
-            # (Bloque de diagnóstico opcional)
-            def _try_decode32(regs, byteorder, wordorder):
-                try:
-                    dec = BinaryPayloadDecoder.fromRegisters(
-                        regs, byteorder=byteorder, wordorder=wordorder
-                    )
-                    v1 = dec.decode_32bit_int()
-                    v2 = dec.decode_32bit_uint()
-                    v3 = BinaryPayloadDecoder.fromRegisters(
-                        regs[2:4], byteorder=byteorder, wordorder=wordorder
-                    ).decode_32bit_uint()
-                    v4 = BinaryPayloadDecoder.fromRegisters(
-                        regs[6:8], byteorder=byteorder, wordorder=wordorder
-                    ).decode_32bit_uint()
-                    return v1, v2, v3, v4
-                except Exception as e:
-                    return f"error:{e}", None, None, None
-
-            for bo, wo, tag in [
-                (Endian.Big, Endian.Big, "BB"),
-                (Endian.Big, Endian.Little, "BL"),
-                (Endian.Little, Endian.Big, "LB"),
-                (Endian.Little, Endian.Little, "LL"),
-            ]:
-                p, soc32, soc32_alt, cap = _try_decode32(
-                    bat_regs.registers, bo, wo
-                )
-                _LOGGER.debug(
-                    "BAT decode %s -> P=%s, SOC32=%s, SOC32_alt=%s, CAP=%s",
-                    tag, p, soc32, soc32_alt, cap,
-                )
-
-            # SOC u16 directo (por si ese es el bueno) y con posible escala 0.1
-            try:
-                _LOGGER.debug(
-                    "SOC16 regs raw: %s",
-                    getattr(soc16_regs, "registers", None),
-                )
-            except NameError:
-                _, _, soc16_regs = _try_read_register_block(
-                    battery_client, SMA_REG_BAT_SOC, 1, self.battery_slave
-                )
-                _LOGGER.debug(
-                    "SOC16 regs raw: %s",
-                    getattr(soc16_regs, "registers", None),
-                )
-
-            try:
-                dec_soc16 = BinaryPayloadDecoder.fromRegisters(
-                    soc16_regs.registers, byteorder=Endian.Big
-                )
-                soc16_val = dec_soc16.decode_16bit_uint()
-                _LOGGER.debug(
-                    "SOC16 u16=%s, u16_scaled(0.1)=%s%%",
-                    soc16_val, soc16_val / 10.0,
-                )
-            except Exception as e:
-                _LOGGER.debug("SOC16 decode error: %s", e)
-            # --- FIN DIAGNÓSTICO ---
-
-            decoder_bat = BinaryPayloadDecoder.fromRegisters(
-                bat_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
+            # Battery charge (U32) @31393
+            _, _, unit_chg, chg_regs = _try_read_register_block(
+                battery_client, SMA_REG_BAT_CHARGE_W, 2, 2
             )
-            # Orden esperada: INT32 potencia, UINT32 SOC, skip 4 bytes, UINT32 capacity
-            bat_power_raw = decoder_bat.decode_32bit_int()
-            bat_soc_raw = decoder_bat.decode_32bit_uint()
-            decoder_bat.skip_bytes(4)
-            bat_capacity_raw = decoder_bat.decode_32bit_uint()
-
-            bat_power = _norm_s32(bat_power_raw)
-            bat_soc = _norm_u32(bat_soc_raw)
-            bat_capacity = _norm_u32(bat_capacity_raw)
-
-            # Si el SOC 32-bit es inválido, prueba 16-bit en 30845 (Input)
-            if bat_soc is None:
-                try:
-                    _, _, soc16_regs = _try_read_register_block(
-                        battery_client, SMA_REG_BAT_SOC, 1, self.battery_slave
-                    )
-                    dec_soc16 = BinaryPayloadDecoder.fromRegisters(
-                        soc16_regs.registers, byteorder=Endian.Big
-                    )
-                    soc16 = _norm_u16(dec_soc16.decode_16bit_uint())
-                    if soc16 is not None and 0 <= soc16 <= 100:
-                        bat_soc = soc16
-                except Exception:
-                    pass
-
-            # Defaults de seguridad
-            if bat_power is None:
-                bat_power = 0
-            if bat_soc is None:
-                bat_soc = 0
-            if bat_capacity is None:
-                bat_capacity = 0
-
-            kind_grid, addr_grid, unit_grid, grid_regs = _try_read_register_block(
-                battery_client, SMA_REG_GRID_POWER, 2, self.battery_slave
+            dec_chg = BinaryPayloadDecoder.fromRegisters(
+                chg_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
-            _LOGGER.debug(
-                "GRID elegido -> kind=%s addr=%s unit=%s",
-                kind_grid, addr_grid, unit_grid,
-            )
+            bat_charge_w_raw = dec_chg.decode_32bit_uint()
+            bat_charge_w = _norm_u32(bat_charge_w_raw) or 0
 
-            decoder_grid = BinaryPayloadDecoder.fromRegisters(
+            # Battery discharge (U32) @31395
+            _, _, unit_dchg, dchg_regs = _try_read_register_block(
+                battery_client, SMA_REG_BAT_DISCHARGE_W, 2, 2
+            )
+            dec_dchg = BinaryPayloadDecoder.fromRegisters(
+                dchg_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
+            )
+            bat_discharge_w_raw = dec_dchg.decode_32bit_uint()
+            bat_discharge_w = _norm_u32(bat_discharge_w_raw) or 0
+
+            # Potencia neta batería: +descarga – carga
+            bat_power = int(bat_discharge_w) - int(bat_charge_w)
+
+            # Grid power (S32) @31249
+            _, _, unit_grid, grid_regs = _try_read_register_block(
+                battery_client, SMA_REG_GRID_POWER, 2, 2
+            )
+            dec_grid = BinaryPayloadDecoder.fromRegisters(
                 grid_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
-            ongrid_power_raw = decoder_grid.decode_32bit_int()
+            ongrid_power_raw = dec_grid.decode_32bit_int()
             ongrid_power = _norm_s32(ongrid_power_raw) or 0
 
             _LOGGER.debug(
-                "Datos Batería OK: SOC=%s%%, BatPower=%sW, GridPower=%sW",
-                bat_soc, bat_power, ongrid_power,
+                "Datos Sistema OK (unit=%s/%s/%s): SOC=%s%%, BatCharge=%sW, BatDischarge=%sW, BatPower=%sW, GridPower=%sW",
+                unit_soc, unit_chg, unit_grid, bat_soc, bat_charge_w, bat_discharge_w, bat_power, ongrid_power
             )
 
-            # --- 2. Leer Inversor FV (Obligatorio) ---
+            # --- 2) PV (Unit 2) en host PV (puede ser mismo host) ---
             _LOGGER.debug("Conectando a Inversor FV: %s", self.pv_ip)
             pv_client.connect()
 
-            kind_pv, addr_pv, unit_pv, pv_regs = _try_read_register_block(
-                pv_client, SMA_REG_PV_POWER, 2, self.pv_slave
+            _, _, unit_pv, pv_regs = _try_read_register_block(
+                pv_client, SMA_REG_PV_POWER, 2, 2
             )
-            _LOGGER.debug(
-                "PV elegido -> kind=%s addr=%s unit=%s",
-                kind_pv, addr_pv, unit_pv,
-            )
-
-            decoder_pv = BinaryPayloadDecoder.fromRegisters(
+            dec_pv = BinaryPayloadDecoder.fromRegisters(
                 pv_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
-            pv_power_raw = decoder_pv.decode_32bit_int()
+            pv_power_raw = dec_pv.decode_32bit_int()
             pv_power = _norm_s32(pv_power_raw) or 0
 
-            _LOGGER.debug("Datos FV OK: PVPower=%sW", pv_power)
+            _LOGGER.debug("Datos FV OK (unit=%s): PVPower=%sW", unit_pv, pv_power)
 
-            # --- 3. Construir Payload (Éxito) ---
+            # --- 3) Construir Payload (Éxito) ---
             telemetry_data = {
                 KEY_BAT_SOC: bat_soc,
                 KEY_BAT_POWER: bat_power,
                 KEY_PV_POWER: pv_power,
                 KEY_GRID_POWER: ongrid_power,
-                KEY_BAT_CHARGE_ALLOWED: bat_charge_allowed,  # placeholders
+                KEY_BAT_CHARGE_ALLOWED: bat_charge_allowed,   # placeholders
                 KEY_BAT_DISCHARGE_ALLOWED: bat_discharge_allowed,
                 KEY_BAT_CAPACITY: bat_capacity,
                 KEY_TOTAL_GRID_OUTPUT: 0,
             }
-            return telemetry_data  # Devuelve NÚMEROS
+            return telemetry_data
 
         except Exception as e:
             _LOGGER.warning("No se pudo obtener telemetría de SMA Modbus: %s", e)
@@ -507,7 +388,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 pass
             _LOGGER.debug("Conexión Modbus cerrada.")
 
-    # --- Escritura Pysma (AÑADIDA) ---
+    # --- Escritura Pysma (placeholder) ---
     async def _async_write_speedwire_commands(self, commands: dict[str, Any]) -> None:
         """[FUNCIÓN ASÍNCRONA] Escribe comandos en el Sunny Home Manager."""
         if not self.shm_ip or not self.shm_password:
@@ -574,7 +455,6 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if telemetry_data_numeric is None:
             _LOGGER.debug("Construyendo telemetría a cero por fallo de Modbus.")
-            # Datos numéricos para los sensores
             telemetry_data_numeric = {
                 KEY_BAT_SOC: 0,
                 KEY_BAT_POWER: 0,
@@ -588,7 +468,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             _LOGGER.debug("Telemetría Modbus SMA real obtenida.")
 
-        # 2. (opcional) Formateo para API externa
+        # 2. Formateo para API externa (strings)
         telemetry_data_for_api = {
             "plant_id": str(self.plant_id),
             "bat_soc": str(telemetry_data_numeric.get(KEY_BAT_SOC, 0)),
@@ -607,7 +487,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
         }
 
-        # 3. Enviar telemetría (formateada) a la API de Spock
+        # 3. Enviar telemetría a la API de Spock
         _LOGGER.debug("Enviando telemetría a Spock API: %s", telemetry_data_for_api)
         headers = {"X-Auth-Token": self.api_token}
 
@@ -632,12 +512,10 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 _LOGGER.debug("Comandos recibidos: %s", command_data)
 
-                # 4. Procesar comandos (Comentado)
+                # (Opcional) escribir comandos al SHM:
                 # if command_data.get("action") != "none" or command_data.get("status") == "ok":
-                #     _LOGGER.debug("Llamando a _async_write_speedwire_commands...")
                 #     await self._async_write_speedwire_commands(command_data)
 
-                # 5. Devolver los DATOS NUMÉRICOS para los sensores
                 return telemetry_data_numeric
 
         except UpdateFailed:
