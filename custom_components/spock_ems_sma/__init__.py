@@ -17,10 +17,6 @@ from pymodbus.constants import Endian
 from pymodbus.payload import BinaryPayloadDecoder
 from pymodbus.payload import BinaryPayloadBuilder
 
-# --- CAMBIO: Imports de Speedwire (pysma) ---
-import pysma
-# --- FIN CAMBIO ---
-
 from .const import (
     DOMAIN,
     API_ENDPOINT,
@@ -32,13 +28,9 @@ from .const import (
     CONF_PV_IP,
     CONF_PV_PORT,
     CONF_PV_SLAVE,
-    # --- CAMBIO ---
-    CONF_SHM_IP,
-    CONF_SHM_GROUP,
-    CONF_SHM_PASSWORD,
-    # --- FIN CAMBIO ---
     DEFAULT_SCAN_INTERVAL_S,
     PLATFORMS,
+    # Importar registros
     SMA_REG_BAT_POWER,
     SMA_REG_BAT_SOC,
     SMA_REG_BAT_CAPACITY,
@@ -59,16 +51,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "is_enabled": True, 
     }
 
-    await asyncio.sleep(2)
-    await coordinator.async_config_entry_first_refresh()
-    _LOGGER.info("Spock EMS SMA: Primer fetch realizado.")
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     _LOGGER.info(
-         "Spock EMS SMA: Ciclo automático (gestionado por listener) iniciado cada %s.", 
-         coordinator.update_interval
+         "Spock EMS SMA: Configuración cargada. El ciclo se iniciará automáticamente."
     )
 
     return True
@@ -99,27 +86,13 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api_token: str = self.config[CONF_API_TOKEN]
         self.plant_id: int = self.config[CONF_PLANT_ID]
         
-        # Configuración Modbus (Lectura)
         self.battery_ip: str = self.config[CONF_BATTERY_IP]
         self.battery_port: int = self.config[CONF_BATTERY_PORT]
         self.battery_slave: int = self.config[CONF_BATTERY_SLAVE]
+        
         self.pv_ip: str = self.config[CONF_PV_IP]
         self.pv_port: int = self.config[CONF_PV_PORT]
         self.pv_slave: int = self.config[CONF_PV_SLAVE]
-        
-        self.battery_client = ModbusTcpClient(
-            host=self.battery_ip, port=self.battery_port, timeout=5
-        )
-        self.pv_client = ModbusTcpClient(
-            host=self.pv_ip, port=self.pv_port, timeout=5
-        )
-        
-        # --- CAMBIO: Configuración Speedwire (Escritura) ---
-        self.shm_ip: str | None = self.config.get(CONF_SHM_IP)
-        self.shm_group: str | None = self.config.get(CONF_SHM_GROUP)
-        self.shm_password: str | None = self.config.get(CONF_SHM_PASSWORD)
-        self.sma_session = None
-        # --- FIN CAMBIO ---
         
         self._session = async_get_clientsession(hass)
 
@@ -130,32 +103,38 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL_S),
         )
 
-    def _read_sma_telemetry(self) -> dict[str, str]:
+    # --- CAMBIO: _read_sma_telemetry ahora devuelve 'None' si falla ---
+    def _read_sma_telemetry(self) -> dict[str, str] | None:
         """
         [FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA.
+        Devuelve 'None' si la lectura falla, en lugar de lanzar una excepción.
         """
-        # ... (Esta función es la misma que en el mensaje anterior, no la repito por brevedad) ...
-        # ... (Lee de self.battery_client y self.pv_client) ...
-        
         _LOGGER.debug("Iniciando lectura Modbus SMA...")
         
-        # Valores por defecto
-        bat_soc = 0
-        bat_power = 0
-        pv_power = 0
-        ongrid_power = 0
-        bat_capacity = 0
-        bat_charge_allowed = True
-        bat_discharge_allowed = True
-
-        # --- 1. Leer Inversor de Batería (Obligatorio) ---
+        battery_client = ModbusTcpClient(
+            host=self.battery_ip, port=self.battery_port, timeout=5
+        )
+        pv_client = ModbusTcpClient(
+            host=self.pv_ip, port=self.pv_port, timeout=5
+        )
+        
         try:
+            # Valores por defecto
+            bat_soc = 0
+            bat_power = 0
+            pv_power = 0
+            ongrid_power = 0
+            bat_capacity = 0
+            bat_charge_allowed = True
+            bat_discharge_allowed = True
+
+            # --- 1. Leer Inversor de Batería (Obligatorio) ---
             _LOGGER.debug("Conectando a Inversor Batería: %s", self.battery_ip)
-            self.battery_client.connect()
+            battery_client.connect()
             
-            bat_regs = self.battery_client.read_holding_registers(
+            bat_regs = battery_client.read_holding_registers(
                 address=SMA_REG_BAT_POWER, 
-                count=7, # 30843 a 30849
+                count=7,
                 slave=self.battery_slave
             )
             if bat_regs.isError():
@@ -164,14 +143,14 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
                 bat_regs.registers, byteorder=Endian.Big
             )
-            bat_power = decoder_bat.decode_32bit_int()    # 30843
-            bat_soc = decoder_bat.decode_32bit_uint()       # 30845
-            decoder_bat.skip_bytes(4)                       # 30847
-            bat_capacity = decoder_bat.decode_32bit_uint()  # 30849
+            bat_power = decoder_bat.decode_32bit_int()
+            bat_soc = decoder_bat.decode_32bit_uint()
+            decoder_bat.skip_bytes(4)
+            bat_capacity = decoder_bat.decode_32bit_uint()
 
-            grid_regs = self.battery_client.read_holding_registers(
+            grid_regs = battery_client.read_holding_registers(
                 address=SMA_REG_GRID_POWER, 
-                count=2, # 30867
+                count=2,
                 slave=self.battery_slave
             )
             if grid_regs.isError():
@@ -184,21 +163,13 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             
             _LOGGER.debug(f"Datos Batería OK: SOC={bat_soc}%, BatPower={bat_power}W, GridPower={ongrid_power}W")
 
-        except Exception as e:
-            _LOGGER.warning(f"Error al leer datos del inversor de batería SMA: {e}")
-            raise 
-        finally:
-            if self.battery_client.is_socket_open():
-                self.battery_client.close()
-
-        # --- 2. Leer Inversor FV (Obligatorio) ---
-        try:
+            # --- 2. Leer Inversor FV (Obligatorio) ---
             _LOGGER.debug("Conectando a Inversor FV: %s", self.pv_ip)
-            self.pv_client.connect()
+            pv_client.connect()
             
-            pv_regs = self.pv_client.read_holding_registers(
+            pv_regs = pv_client.read_holding_registers(
                 address=SMA_REG_PV_POWER, 
-                count=2, # 30775
+                count=2,
                 slave=self.pv_slave
             )
             if pv_regs.isError():
@@ -210,116 +181,49 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pv_power = decoder_pv.decode_32bit_int()
             _LOGGER.debug(f"Datos FV OK: PVPower={pv_power}W")
             
-        except Exception as e:
-            _LOGGER.warning(f"No se pudo leer el inversor FV en {self.pv_ip}: {e}")
-            raise
-        finally:
-            if self.pv_client.is_socket_open():
-                self.pv_client.close()
 
-        # --- 3. Construir Payload ---
-        telemetry_data = {
-            "plant_id": str(self.plant_id),
-            "bat_soc": str(bat_soc),
-            "bat_power": str(bat_power),
-            "pv_power": str(pv_power),
-            "ongrid_power": str(ongrid_power),
-            "bat_charge_allowed": str(bat_charge_allowed).lower(),
-            "bat_discharge_allowed": str(bat_discharge_allowed).lower(),
-            "bat_capacity": str(bat_capacity),
-            "total_grid_output_energy": "0" 
-        }
-        return telemetry_data
-
-
-    # --- CAMBIO: Nueva función de escritura (asíncrona) ---
-    async def _async_write_speedwire_commands(self, commands: dict[str, Any]) -> None:
-        """
-        [FUNCIÓN ASÍNCRONA] Escribe comandos en el Sunny Home Manager
-        usando el protocolo Speedwire (pysma).
-        
-        !!! ESTA ES LA FUNCIÓN QUE DEBES ADAPTAR !!!
-        """
-        
-        # 1. Comprobar si la escritura está configurada
-        if not self.shm_ip or not self.shm_password:
-            _LOGGER.warning(
-                "Se recibieron comandos de API, pero la IP o contraseña del "
-                "Sunny Home Manager (SHM) no están configurados. Omitiendo escritura."
-            )
-            return
-
-        _LOGGER.debug("Recibidos comandos de API para escribir en SHM (Speedwire): %s", commands)
-        
-        # 2. Inicializar cliente pysma (usa la sesión aiohttp de HA)
-        sma = pysma.SMA(
-            self.hass.helpers.aiohttp_client.async_get_clientsession(), 
-            self.shm_ip, 
-            self.shm_password, 
-            self.shm_group
-        )
-        
-        try:
-            # 3. Iniciar sesión
-            if not await sma.new_session():
-                _LOGGER.error("No se pudo iniciar sesión en el Sunny Home Manager. ¿Contraseña o IP incorrectas?")
-                return
-
-            _LOGGER.debug("Sesión iniciada en Sunny Home Manager (%s)", self.shm_ip)
-
-            # --- INICIO DE LÓGICA DE ESCRITURA (EJEMPLO) ---
-            
-            # NOTA: Debes encontrar los "Key" (son Object IDs) correctos 
-            # para tu modelo de Home Manager.
-            # Estos son ejemplos comunes, pero pueden no funcionar.
-            
-            # Key para forzar la carga de la batería (en W)
-            # KEY_FORZAR_CARGA = "6315_402366F4" # (Ejemplo: Carga activa desde red)
-            
-            # Key para forzar la descarga de la batería (en W)
-            # KEY_FORZAR_DESCARGA = "6316_402366F4" # (Ejemplo: Descarga activa)
-
-            operation = commands.get("battery_operation")
-            action = commands.get("action")
-            amount = int(commands.get("amount", 0))
-
-            if operation == "manual" and action == "charge":
-                _LOGGER.info(f"Enviando comando Speedwire: Forzar Carga de {amount}W")
-                # await sma.set_values({
-                #     KEY_FORZAR_DESCARGA: 0, # Poner el opuesto a 0
-                #     KEY_FORZAR_CARGA: amount
-                # })
-                
-            elif operation == "manual" and action == "discharge":
-                _LOGGER.info(f"Enviando comando Speedwire: Forzar Descarga de {amount}W")
-                # await sma.set_values({
-                #     KEY_FORZAR_CARGA: 0,
-                #     KEY_FORZAR_DESCARGA: amount
-                # })
-
-            elif operation == "auto":
-                _LOGGER.info("Enviando comando Speedwire: Modo Automático")
-                # await sma.set_values({
-                #     KEY_FORZAR_CARGA: 0,
-                #     KEY_FORZAR_DESCARGA: 0
-                # })
-            
-            _LOGGER.warning(
-                "La lógica de escritura Speedwire (_async_write_speedwire_commands) "
-                "ha sido llamada, pero las 'Keys' (Object IDs) están comentadas. "
-                "Debes editar __init__.py para habilitarlas."
-            )
-            
-            # --- FIN DE LÓGICA DE ESCRITURA ---
+            # --- 3. Construir Payload (Éxito) ---
+            telemetry_data = {
+                "plant_id": str(self.plant_id),
+                "bat_soc": str(bat_soc),
+                "bat_power": str(bat_power),
+                "pv_power": str(pv_power),
+                "ongrid_power": str(ongrid_power),
+                "bat_charge_allowed": str(bat_charge_allowed).lower(),
+                "bat_discharge_allowed": str(bat_discharge_allowed).lower(),
+                "bat_capacity": str(bat_capacity),
+                "total_grid_output_energy": "0" 
+            }
+            return telemetry_data
 
         except Exception as e:
-            _LOGGER.error(f"Error al escribir comandos Speedwire/pysma: {e}")
+            # --- CASO DE FALLO ---
+            _LOGGER.warning(f"No se pudo obtener telemetría de SMA Modbus: {e}")
+            return None # Devuelve None en lugar de lanzar un error
+        
         finally:
-            _LOGGER.debug("Cerrando sesión de Sunny Home Manager.")
-            await sma.close_session()
+            if battery_client.is_socket_open():
+                battery_client.close()
+            if pv_client.is_socket_open():
+                pv_client.close()
+            _LOGGER.debug("Conexión Modbus cerrada.")
     # --- FIN DEL CAMBIO ---
 
 
+    def _write_modbus_commands(self, commands: dict[str, Any]) -> None:
+        """
+        [FUNCIÓN SÍNCRONA] Escribe los comandos de la API en el inversor.
+        ADVERTENCIA: SMA NO USA MODBUS PARA ESCRITURA DE BATERÍA.
+        """
+        _LOGGER.warning(
+            "Se ha llamado a la función de escritura Modbus para SMA, "
+            "pero SMA no soporta control de batería vía Modbus TCP. "
+            "Esta función es solo una plantilla y no tendrá efecto."
+        )
+        pass
+
+
+    # --- CAMBIO: _async_update_data ahora maneja 'None' ---
     async def _async_update_data(self) -> dict[str, Any]:
         """
         Ciclo de actualización unificado (Versión Modbus)
@@ -330,20 +234,23 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         if not is_enabled:
             _LOGGER.debug("Sondeo Modbus deshabilitado por el interruptor. Omitiendo ciclo.")
+            if self.data is None: 
+                 return {} 
             return self.data 
 
         _LOGGER.debug("Iniciando ciclo de actualización Modbus SMA...")
         
         telemetry_data: dict[str, str] = {}
         
-        try:
-            telemetry_data = await self.hass.async_add_executor_job(
-                self._read_sma_telemetry
-            )
-            _LOGGER.debug("Telemetría Modbus SMA real obtenida.")
+        # 1. Ejecutar la lectura Modbus (ya no usa try/except)
+        telemetry_data_or_none = await self.hass.async_add_executor_job(
+            self._read_sma_telemetry
+        )
 
-        except Exception as e:
-            _LOGGER.warning(f"No se pudo obtener telemetría de SMA Modbus: {e}. Enviando telemetría a cero.")
+        # 2. Comprobar el resultado
+        if telemetry_data_or_none is None:
+            # Modbus falló (ya se logueó). Construimos el payload a cero.
+            _LOGGER.debug("Construyendo telemetría a cero por fallo de Modbus.")
             telemetry_data = {
                 "plant_id": str(self.plant_id),
                 "bat_soc": "0", "bat_power": "0", "pv_power": "0",
@@ -351,10 +258,16 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "bat_discharge_allowed": "false", "bat_capacity": "0",
                 "total_grid_output_energy": "0"
             }
+        else:
+            # Modbus tuvo éxito.
+            _LOGGER.debug("Telemetría Modbus SMA real obtenida.")
+            telemetry_data = telemetry_data_or_none
         
+        # 3. Enviar telemetría (real o cero) a la API de Spock
         _LOGGER.debug("Enviando telemetría a Spock API: %s", telemetry_data)
         headers = {"X-Auth-Token": self.api_token}
         
+        # Este try/except ahora solo protege la llamada a la API de Spock
         try:
             async with self._session.post(
                 API_ENDPOINT, 
@@ -377,17 +290,14 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 _LOGGER.debug("Comandos recibidos: %s", command_data)
                 
-                # --- CAMBIO: Lógica de escritura (comentada) ---
-                # 4. Procesar comandos (si hay algo que hacer)
-                # if command_data.get("action") != "none" or command_data.get("status") == "ok":
-                #    _LOGGER.debug("Llamando a _async_write_speedwire_commands...")
-                #    await self._async_write_speedwire_commands(command_data)
-                # --- FIN DEL CAMBIO ---
+                # (Lógica de escritura comentada)
                 
                 return command_data
 
         except UpdateFailed:
-            raise
+            raise # Errores de la API de Spock (403, 500, etc)
         except Exception as err:
+            # Errores de red al contactar con la API de Spock
             _LOGGER.error("Error en el ciclo de actualización (API POST): %s", err)
             raise UpdateFailed(f"Error en el ciclo de actualización (API POST): {err}") from err
+    # --- FIN DEL CAMBIO ---
