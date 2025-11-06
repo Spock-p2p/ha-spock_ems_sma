@@ -283,6 +283,46 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 battery_client, SMA_REG_BAT_POWER, 8, self.battery_slave
             )
 
+            # --- DIAGNÓSTICO: dump + decodificaciones alternativas ---
+            _LOGGER.debug("BAT regs raw: %s", getattr(bat_regs, "registers", None))
+            
+            def _try_decode32(regs, byteorder, wordorder):
+                try:
+                    dec = BinaryPayloadDecoder.fromRegisters(regs, byteorder=byteorder, wordorder=wordorder)
+                    v1 = dec.decode_32bit_int()
+                    v2 = dec.decode_32bit_uint()
+                    v3 = BinaryPayloadDecoder.fromRegisters(regs[2:4], byteorder=byteorder, wordorder=wordorder).decode_32bit_uint()
+                    v4 = BinaryPayloadDecoder.fromRegisters(regs[6:8], byteorder=byteorder, wordorder=wordorder).decode_32bit_uint()
+                    return v1, v2, v3, v4
+                except Exception as e:
+                    return f"error:{e}", None, None, None
+            
+            for bo, wo, tag in [
+                (Endian.Big, Endian.Big, "BB"),
+                (Endian.Big, Endian.Little, "BL"),
+                (Endian.Little, Endian.Big, "LB"),
+                (Endian.Little, Endian.Little, "LL"),
+            ]:
+                p, soc32, soc32_alt, cap = _try_decode32(bat_regs.registers, bo, wo)
+                _LOGGER.debug("BAT decode %s -> P=%s, SOC32=%s, SOC32_alt=%s, CAP=%s", tag, p, soc32, soc32_alt, cap)
+            
+            # SOC u16 directo (por si ese es el bueno) y con posible escala 0.1
+            try:
+                _LOGGER.debug("SOC16 regs raw: %s", getattr(soc16_regs, "registers", None))
+            except NameError:
+                # leer por si no se ha leído aún
+                _, _, soc16_regs = _try_read_register_block(battery_client, SMA_REG_BAT_SOC, 1, self.battery_slave)
+                _LOGGER.debug("SOC16 regs raw: %s", getattr(soc16_regs, "registers", None))
+            
+            try:
+                dec_soc16 = BinaryPayloadDecoder.fromRegisters(soc16_regs.registers, byteorder=Endian.Big)
+                soc16_val = dec_soc16.decode_16bit_uint()
+                _LOGGER.debug("SOC16 u16=%s, u16_scaled(0.1)=%s%%", soc16_val, soc16_val / 10.0)
+            except Exception as e:
+                _LOGGER.debug("SOC16 decode error: %s", e)
+            # --- FIN DIAGNÓSTICO ---
+            
+
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
                 bat_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
