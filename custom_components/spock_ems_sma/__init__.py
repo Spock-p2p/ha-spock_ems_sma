@@ -1,19 +1,22 @@
 """Integración Spock EMS SMA (Modbus)"""
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import (
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 # --- Imports de Modbus (compatibles) ---
 from pymodbus.client import ModbusTcpClient
 from .compat_pymodbus import Endian
+
 try:
     # PyModbus < 3.11
     from pymodbus.payload import BinaryPayloadDecoder, BinaryPayloadBuilder
@@ -107,9 +110,10 @@ def _mb_write_multi(method, address: int, values, unit_id: int, **kwargs):
             # 3) sin id de unidad
             return method(address, values=values, **kwargs)
 
+
 def _try_read_register_block(client, reg: int, count: int, unit_id: int):
     """
-    Intenta leer 'reg' con todas las combinaciones típicas:
+    Intenta leer 'reg' con combinaciones típicas:
     - Holding con base 40001 y 40000
     - Input con base 30001 y 30000
     Devuelve la primera respuesta válida (sin isError).
@@ -117,8 +121,8 @@ def _try_read_register_block(client, reg: int, count: int, unit_id: int):
     attempts = [
         ("holding", reg - 40001),
         ("holding", reg - 40000),
-        ("input",   reg - 30001),
-        ("input",   reg - 30000),
+        ("input", reg - 30001),
+        ("input", reg - 30000),
     ]
 
     for kind, addr in attempts:
@@ -126,21 +130,44 @@ def _try_read_register_block(client, reg: int, count: int, unit_id: int):
             if addr < 0:
                 continue
             if kind == "holding":
-                resp = _mb_read(client.read_holding_registers, address=addr, count=count, unit_id=unit_id)
+                resp = _mb_read(
+                    client.read_holding_registers,
+                    address=addr,
+                    count=count,
+                    unit_id=unit_id,
+                )
             else:
-                resp = _mb_read(client.read_input_registers, address=addr, count=count, unit_id=unit_id)
+                resp = _mb_read(
+                    client.read_input_registers,
+                    address=addr,
+                    count=count,
+                    unit_id=unit_id,
+                )
 
             # Algunas builds devuelven objeto con isError(); otras lanzan excepción.
             if hasattr(resp, "isError") and resp.isError():
-                _LOGGER.debug("Intento %s@%s (unit=%s) devolvió excepción Modbus: %s",
-                              kind, addr, unit_id, resp)
+                _LOGGER.debug(
+                    "Intento %s@%s (unit=%s) devolvió excepción Modbus: %s",
+                    kind,
+                    addr,
+                    unit_id,
+                    resp,
+                )
                 continue
 
-            _LOGGER.debug("Lectura OK con %s@%s (unit=%s), reg lógico %s, count=%s",
-                          kind, addr, unit_id, reg, count)
+            _LOGGER.debug(
+                "Lectura OK con %s@%s (unit=%s), reg lógico %s, count=%s",
+                kind,
+                addr,
+                unit_id,
+                reg,
+                count,
+            )
             return kind, addr, resp
         except Exception as e:
-            _LOGGER.debug("Intento %s@%s (unit=%s) falló: %s", kind, addr, unit_id, e)
+            _LOGGER.debug(
+                "Intento %s@%s (unit=%s) falló: %s", kind, addr, unit_id, e
+            )
             continue
 
     raise ConnectionError(
@@ -150,7 +177,7 @@ def _try_read_register_block(client, reg: int, count: int, unit_id: int):
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Configura la integración desde la entrada de configuración.
+    """Configura la integración desde la entrada de configuración."""
     coordinator = SpockEnergyCoordinator(hass, entry)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
@@ -161,12 +188,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
-    _LOGGER.info("Spock EMS SMA: Configuración cargada. El ciclo se iniciará automáticamente.")
+    _LOGGER.info(
+        "Spock EMS SMA: Configuración cargada. El ciclo se iniciará automáticamente."
+    )
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Descarga la entrada de configuración.
+    """Descarga la entrada de configuración."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
@@ -174,12 +203,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    # Recarga la entrada de configuración al modificar opciones.
+    """Recarga la entrada de configuración al modificar opciones."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    # Coordinator que gestiona el ciclo de API unificado.
+    """Coordinator que gestiona el ciclo de API unificado."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         # Inicializa el coordinador.
@@ -196,11 +225,10 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.pv_port: int = self.config[CONF_PV_PORT]
         self.pv_slave: int = self.config[CONF_PV_SLAVE]
 
-        # --- CAMBIO: Añadida config SHM ---
+        # --- Config SHM ---
         self.shm_ip: str | None = self.config.get(CONF_SHM_IP)
         self.shm_group: str | None = self.config.get(CONF_SHM_GROUP)
         self.shm_password: str | None = self.config.get(CONF_SHM_PASSWORD)
-        # --- FIN CAMBIO ---
 
         self._session = async_get_clientsession(hass)
 
@@ -211,12 +239,14 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL_S),
         )
 
-    # --- CAMBIO: _read_sma_telemetry ahora devuelve NÚMEROS ---
+    # --- Lectura Modbus: devuelve NÚMEROS ---
     def _read_sma_telemetry(self) -> dict[str, Any] | None:
-        # [FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA.
+        """[FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA."""
         _LOGGER.debug("Iniciando lectura Modbus SMA...")
 
-        battery_client = ModbusTcpClient(host=self.battery_ip, port=self.battery_port, timeout=5)
+        battery_client = ModbusTcpClient(
+            host=self.battery_ip, port=self.battery_port, timeout=5
+        )
         pv_client = ModbusTcpClient(host=self.pv_ip, port=self.pv_port, timeout=5)
 
         try:
@@ -236,7 +266,6 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 battery_client, SMA_REG_BAT_POWER, 7, self.battery_slave
             )
 
-
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
                 bat_regs.registers, byteorder=Endian.Big  # Usando Endian del shim
             )
@@ -249,7 +278,6 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             kind_grid, addr_grid, grid_regs = _try_read_register_block(
                 battery_client, SMA_REG_GRID_POWER, 2, self.battery_slave
             )
-
 
             decoder_grid = BinaryPayloadDecoder.fromRegisters(
                 grid_regs.registers, byteorder=Endian.Big
@@ -283,7 +311,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 KEY_BAT_POWER: bat_power,
                 KEY_PV_POWER: pv_power,
                 KEY_GRID_POWER: ongrid_power,
-                KEY_BAT_CHARGE_ALLOWED: bat_charge_allowed,   # placeholders
+                KEY_BAT_CHARGE_ALLOWED: bat_charge_allowed,  # placeholders
                 KEY_BAT_DISCHARGE_ALLOWED: bat_discharge_allowed,
                 KEY_BAT_CAPACITY: bat_capacity,
                 KEY_TOTAL_GRID_OUTPUT: 0,
@@ -299,7 +327,6 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if hasattr(battery_client, "is_socket_open") and battery_client.is_socket_open():
                     battery_client.close()
                 else:
-                    # cierre defensivo para algunas builds
                     battery_client.close()
             except Exception:
                 pass
@@ -312,9 +339,9 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 pass
             _LOGGER.debug("Conexión Modbus cerrada.")
 
-    # --- CAMBIO: Función de escritura Pysma (AÑADIDA) ---
+    # --- Escritura Pysma (AÑADIDA) ---
     async def _async_write_speedwire_commands(self, commands: dict[str, Any]) -> None:
-        # [FUNCIÓN ASÍNCRONA] Escribe comandos en el Sunny Home Manager
+        """[FUNCIÓN ASÍNCRONA] Escribe comandos en el Sunny Home Manager."""
         if not self.shm_ip or not self.shm_password:
             _LOGGER.warning(
                 "Se recibieron comandos de API, pero la IP o contraseña del "
@@ -322,7 +349,9 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return
 
-        _LOGGER.debug("Recibidos comandos de API para escribir en SHM (Speedwire): %s", commands)
+        _LOGGER.debug(
+            "Recibidos comandos de API para escribir en SHM (Speedwire): %s", commands
+        )
 
         sma = pysma.SMA(
             self.hass.helpers.aiohttp_client.async_get_clientsession(),
@@ -333,7 +362,9 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             if not await sma.new_session():
-                _LOGGER.error("No se pudo iniciar sesión en el Sunny Home Manager. ¿Contraseña o IP incorrectas?")
+                _LOGGER.error(
+                    "No se pudo iniciar sesión en el Sunny Home Manager. ¿Contraseña o IP incorrectas?"
+                )
                 return
 
             _LOGGER.debug("Sesión iniciada en Sunny Home Manager (%s)", self.shm_ip)
@@ -350,14 +381,16 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Cerrando sesión de Sunny Home Manager.")
             await sma.close_session()
 
-    # --- CAMBIO: _async_update_data ahora devuelve los datos numéricos ---
+    # --- Ciclo de actualización: devuelve datos numéricos ---
     async def _async_update_data(self) -> dict[str, Any]:
-        # Ciclo de actualización unificado (Versión Modbus)
+        """Ciclo de actualización unificado (Versión Modbus)."""
         entry_id = self.config_entry.entry_id
         is_enabled = self.hass.data[DOMAIN].get(entry_id, {}).get("is_enabled", True)
 
         if not is_enabled:
-            _LOGGER.debug("Sondeo Modbus deshabilitado por el interruptor. Omitiendo ciclo.")
+            _LOGGER.debug(
+                "Sondeo Modbus deshabilitado por el interruptor. Omitiendo ciclo."
+            )
             if self.data is None:
                 return {}
             return self.data
@@ -365,10 +398,11 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("Iniciando ciclo de actualización Modbus SMA...")
 
         telemetry_data_numeric: dict[str, Any] | None
-        telemetry_data_for_api: dict[str, str]
 
         # 1. Leer datos Modbus (devuelve números)
-        telemetry_data_numeric = await self.hass.async_add_executor_job(self._read_sma_telemetry)
+        telemetry_data_numeric = await self.hass.async_add_executor_job(
+            self._read_sma_telemetry
+        )
 
         if telemetry_data_numeric is None:
             _LOGGER.debug("Construyendo telemetría a cero por fallo de Modbus.")
@@ -386,17 +420,23 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             _LOGGER.debug("Telemetría Modbus SMA real obtenida.")
 
-        # 2. Formatear datos para la API (strings)
+        # 2. (opcional) Formateo para API externa: lo haces más abajo cuando toque
         telemetry_data_for_api = {
             "plant_id": str(self.plant_id),
             "bat_soc": str(telemetry_data_numeric.get(KEY_BAT_SOC, 0)),
             "bat_power": str(telemetry_data_numeric.get(KEY_BAT_POWER, 0)),
             "pv_power": str(telemetry_data_numeric.get(KEY_PV_POWER, 0)),
             "ongrid_power": str(telemetry_data_numeric.get(KEY_GRID_POWER, 0)),
-            "bat_charge_allowed": str(telemetry_data_numeric.get(KEY_BAT_CHARGE_ALLOWED, False)).lower(),
-            "bat_discharge_allowed": str(telemetry_data_numeric.get(KEY_BAT_DISCHARGE_ALLOWED, False)).lower(),
+            "bat_charge_allowed": str(
+                telemetry_data_numeric.get(KEY_BAT_CHARGE_ALLOWED, False)
+            ).lower(),
+            "bat_discharge_allowed": str(
+                telemetry_data_numeric.get(KEY_BAT_DISCHARGE_ALLOWED, False)
+            ).lower(),
             "bat_capacity": str(telemetry_data_numeric.get(KEY_BAT_CAPACITY, 0)),
-            "total_grid_output_energy": str(telemetry_data_numeric.get(KEY_TOTAL_GRID_OUTPUT, 0)),
+            "total_grid_output_energy": str(
+                telemetry_data_numeric.get(KEY_TOTAL_GRID_OUTPUT, 0)
+            ),
         }
 
         # 3. Enviar telemetría (formateada) a la API de Spock
@@ -404,7 +444,9 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         headers = {"X-Auth-Token": self.api_token}
 
         try:
-            async with self._session.post(API_ENDPOINT, headers=headers, json=telemetry_data_for_api) as resp:
+            async with self._session.post(
+                API_ENDPOINT, headers=headers, json=telemetry_data_for_api
+            ) as resp:
                 if resp.status == 403:
                     raise UpdateFailed("API Token inválido (403)")
                 if resp.status != 200:
@@ -415,15 +457,17 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 command_data = await resp.json(content_type=None)
 
                 if not isinstance(command_data, dict):
-                    _LOGGER.warning("Respuesta de API inesperada (no es un dict): %s", command_data)
+                    _LOGGER.warning(
+                        "Respuesta de API inesperada (no es un dict): %s", command_data
+                    )
                     raise UpdateFailed("Respuesta de API inesperada")
 
                 _LOGGER.debug("Comandos recibidos: %s", command_data)
 
                 # 4. Procesar comandos (Comentado)
                 # if command_data.get("action") != "none" or command_data.get("status") == "ok":
-                #    _LOGGER.debug("Llamando a _async_write_speedwire_commands...")
-                #    await self._async_write_speedwire_commands(command_data)
+                #     _LOGGER.debug("Llamando a _async_write_speedwire_commands...")
+                #     await self._async_write_speedwire_commands(command_data)
 
                 # 5. Devolver los DATOS NUMÉRICOS para los sensores
                 return telemetry_data_numeric
@@ -432,4 +476,6 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise
         except Exception as err:
             _LOGGER.error("Error en el ciclo de actualización (API POST): %s", err)
-            raise UpdateFailed(f"Error en el ciclo de actualización (API POST): {err}") from err
+            raise UpdateFailed(
+                f"Error en el ciclo de actualización (API POST): {err}"
+            ) from err
