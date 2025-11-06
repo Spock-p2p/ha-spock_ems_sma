@@ -19,7 +19,13 @@ except Exception:
     from .compat_payload import BinaryPayloadDecoder  # shim local si tu build lo necesita
 
 # --- Speedwire / pysma (para batería y PCC) ---
-import pysma
+try:
+    # Estilo típico en pysma usado por integraciones HA
+    from pysma import SMA  # type: ignore
+except Exception:
+    # Fallback por si tu build expone SMA colgado del módulo
+    import pysma  # type: ignore
+    SMA = getattr(pysma, "SMA", None)  # type: ignore
 
 from .const import (
     DOMAIN,
@@ -34,6 +40,7 @@ from .const import (
     CONF_SHM_IP,
     CONF_SHM_GROUP,
     CONF_SHM_PASSWORD,
+    # Compat con switch.py
     CONF_BATTERY_IP, CONF_BATTERY_PORT, CONF_BATTERY_SLAVE,
     # Varios
     DEFAULT_SCAN_INTERVAL_S,
@@ -72,35 +79,42 @@ def _mb_read(method, address: int, count: int, unit_id: int, **kwargs):
 
 def _try_read_register_block(client, reg: int, count: int, unit_id: int):
     """
-    Intenta leer reg con combinaciones típicas:
-      * Input base 30001 y 30000
-      * Holding base 40001 y 40000
-    Devuelve (kind, addr, resp) con la primera lectura válida (no 0xFFFF...).
+    Intenta leer reg con varias combinaciones:
+      * Unit IDs: [unit_id, 3, 126, 2, 1, 10]
+      * Input base 30001 y 30000; Holding base 40001 y 40000
+    Devuelve (kind, addr, unit_used, resp) en la primera lectura válida (no 0xFFFF...).
     """
+    unit_candidates: list[int] = []
+    for u in (unit_id, 3, 126, 2, 1, 10):
+        if u is not None and u not in unit_candidates:
+            unit_candidates.append(u)
+
     attempts = [
-        ("input", reg - 30001),
-        ("input", reg - 30000),
+        ("input",  reg - 30001),
+        ("input",  reg - 30000),
         ("holding", reg - 40001),
         ("holding", reg - 40000),
     ]
-    last_exc = None
-    for kind, addr in attempts:
-        try:
-            if addr < 0:
+
+    last_exc: Exception | None = None
+    for u in unit_candidates:
+        for kind, addr in attempts:
+            try:
+                if addr < 0:
+                    continue
+                if kind == "input":
+                    resp = _mb_read(client.read_input_registers, address=addr, count=count, unit_id=u)
+                else:
+                    resp = _mb_read(client.read_holding_registers, address=addr, count=count, unit_id=u)
+                if hasattr(resp, "isError") and resp.isError():
+                    continue
+                regs = getattr(resp, "registers", None)
+                if regs and not all((r & 0xFFFF) == 0xFFFF for r in regs):
+                    _LOGGER.debug("PV Modbus OK %s@%s unit=%s reg=%s -> %s", kind, addr, u, reg, regs)
+                    return kind, addr, u, resp
+            except Exception as e:
+                last_exc = e
                 continue
-            if kind == "input":
-                resp = _mb_read(client.read_input_registers, address=addr, count=count, unit_id=unit_id)
-            else:
-                resp = _mb_read(client.read_holding_registers, address=addr, count=count, unit_id=unit_id)
-            if hasattr(resp, "isError") and resp.isError():
-                continue
-            regs = getattr(resp, "registers", None)
-            if regs and not all((r & 0xFFFF) == 0xFFFF for r in regs):
-                _LOGGER.debug("PV Modbus OK %s@%s unit=%s reg=%s -> %s", kind, addr, unit_id, reg, regs)
-                return kind, addr, resp
-        except Exception as e:
-            last_exc = e
-            continue
     raise ConnectionError(f"No PV regs at {reg} (last: {last_exc})")
 
 
@@ -197,10 +211,11 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         client = ModbusTcpClient(host=self.pv_ip, port=self.pv_port, timeout=5)
         try:
             client.connect()
-            _, _, resp = _try_read_register_block(client, SMA_REG_PV_POWER, 2, self.pv_slave or 2)
+            _, _, unit_used, resp = _try_read_register_block(client, SMA_REG_PV_POWER, 2, self.pv_slave or 2)
             dec = BinaryPayloadDecoder.fromRegisters(resp.registers, byteorder=Endian.Big, wordorder=Endian.Little)
             raw = dec.decode_32bit_int()
             val = _norm_s32(raw) or 0
+            _LOGGER.debug("PV power read (unit=%s): raw=%s -> %s W", unit_used, raw, val)
             return int(val)
         except Exception as e:
             _LOGGER.debug("PV Modbus read failed: %s", e)
@@ -218,45 +233,74 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Sin shm_ip configurada: batería/PCC quedarán a 0.")
             return out
 
-        sma = pysma.SMA(self._session, self.shm_ip, self.shm_password or "", self.shm_group)
+        if "SMA" not in globals() or SMA is None:
+            _LOGGER.debug("pysma: no se encontró clase SMA en la librería instalada.")
+            return out
+
+        # pysma espera URL con esquema (http/https)
+        base = self.shm_ip.strip()
+        if not base.startswith(("http://", "https://")):
+            base = f"http://{base}"
+
+        sma = SMA(self._session, base, self.shm_password or "", self.shm_group)
+
         try:
             if not await sma.new_session():
-                _LOGGER.debug("pysma: no se pudo iniciar sesión en SHM2 %s", self.shm_ip)
+                _LOGGER.debug("pysma: no se pudo iniciar sesión en SHM2 %s", base)
                 return out
 
-            # Algunas versiones de pysma usan read(k); si tu build usa get_values, adaptamos rápido.
-            data: dict[str, Any] = {}
-            for key, dest in PYSMA_KEYS:
-                try:
-                    val = await sma.read(key)
-                    if val is not None:
-                        data[dest] = val
-                except Exception:
-                    continue
+            values: dict[str, Any] = {}
 
+            # Preferir get_values si está disponible; si no, fallback a read(key)
+            wanted = {k: None for k, _ in PYSMA_KEYS}
+
+            try:
+                get_values = getattr(sma, "get_values", None)
+                if callable(get_values):
+                    res = await get_values(wanted)
+                    if isinstance(res, dict):
+                        values.update(res)
+                else:
+                    read = getattr(sma, "read", None)
+                    if callable(read):
+                        for k in wanted.keys():
+                            try:
+                                v = await read(k)
+                                if v is not None:
+                                    values[k] = v
+                            except Exception:
+                                continue
+            except Exception as e:
+                _LOGGER.debug("pysma get_values/read error: %s", e)
+
+            # Cerrar sesión
             try:
                 await sma.close_session()
             except Exception:
                 pass
 
-            # Normaliza a int
-            if "soc" in data and data["soc"] is not None:
+            # Mapear a nuestras claves y normalizar
+            def _to_int(x):
                 try:
-                    out["soc"] = int(float(data["soc"]))
+                    return int(float(x))
                 except Exception:
-                    pass
-            if "bat_pwr" in data and data["bat_pwr"] is not None:
-                try:
-                    out["bat_pwr"] = int(float(data["bat_pwr"]))
-                except Exception:
-                    pass
-            if "grid_pwr" in data and data["grid_pwr"] is not None:
-                try:
-                    out["grid_pwr"] = int(float(data["grid_pwr"]))
-                except Exception:
-                    pass
+                    return 0
 
-            _LOGGER.debug("SHM2 Speedwire -> SOC=%s%%, BatPower=%sW, Grid=%sW", out["soc"], out["bat_pwr"], out["grid_pwr"])
+            soc = values.get("Bat.SOC", values.get("bat_soc"))
+            bat_pwr = values.get("Bat.Pwr", values.get("bat_power"))
+            grid_pwr = values.get("GridMs.TotW", values.get("grid_power"))
+
+            if soc is not None:
+                out["soc"] = _to_int(soc)
+            if bat_pwr is not None:
+                out["bat_pwr"] = _to_int(bat_pwr)
+            if grid_pwr is not None:
+                out["grid_pwr"] = _to_int(grid_pwr)
+
+            _LOGGER.debug(
+                "SHM2 Speedwire -> SOC=%s%%, BatPower=%sW, Grid=%sW",
+                out["soc"], out["bat_pwr"], out["grid_pwr"]
+            )
             return out
 
         except Exception as e:
