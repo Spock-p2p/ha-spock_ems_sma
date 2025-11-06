@@ -175,6 +175,23 @@ def _try_read_register_block(client, reg: int, count: int, unit_id: int):
         f"con ninguna combinación de función/offset estándar."
     )
 
+# --- Normalización de valores SMA ---
+INVALID_16 = {0xFFFF}
+INVALID_32U = {0xFFFFFFFF, 0x80000000}
+INVALID_32S = {-1, -2147483648}
+
+
+def _norm_u16(v: int) -> int | None:
+    return None if v in INVALID_16 else v
+
+
+def _norm_u32(v: int) -> int | None:
+    return None if v in INVALID_32U else v
+
+
+def _norm_s32(v: int) -> int | None:
+    return None if v in INVALID_32S else v
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configura la integración desde la entrada de configuración."""
@@ -267,22 +284,50 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
-                bat_regs.registers, byteorder=Endian.Big  # Usando Endian del shim
+                bat_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
             # orden esperada: INT32 potencia, UINT32 SOC, skip 4 bytes, UINT32 capacity
-            bat_power = decoder_bat.decode_32bit_int()
-            bat_soc = decoder_bat.decode_32bit_uint()
+            bat_power_raw = decoder_bat.decode_32bit_int()
+            bat_soc_raw = decoder_bat.decode_32bit_uint()
             decoder_bat.skip_bytes(4)
-            bat_capacity = decoder_bat.decode_32bit_uint()
+            bat_capacity_raw = decoder_bat.decode_32bit_uint()
+
+            bat_power = _norm_s32(bat_power_raw)
+            bat_soc = _norm_u32(bat_soc_raw)
+            bat_capacity = _norm_u32(bat_capacity_raw)
+
+            # Si el SOC 32-bit es inválido, prueba 16-bit en 30845 (Input)
+            if bat_soc is None:
+                try:
+                    _, _, soc16_regs = _try_read_register_block(
+                        battery_client, SMA_REG_BAT_SOC, 1, self.battery_slave
+                    )
+                    dec_soc16 = BinaryPayloadDecoder.fromRegisters(
+                        soc16_regs.registers, byteorder=Endian.Big
+                    )
+                    soc16 = _norm_u16(dec_soc16.decode_16bit_uint())
+                    if soc16 is not None and 0 <= soc16 <= 100:
+                        bat_soc = soc16
+                except Exception:
+                    pass
+
+            # Defaults de seguridad
+            if bat_power is None:
+                bat_power = 0
+            if bat_soc is None:
+                bat_soc = 0
+            if bat_capacity is None:
+                bat_capacity = 0
 
             kind_grid, addr_grid, grid_regs = _try_read_register_block(
                 battery_client, SMA_REG_GRID_POWER, 2, self.battery_slave
             )
 
             decoder_grid = BinaryPayloadDecoder.fromRegisters(
-                grid_regs.registers, byteorder=Endian.Big
+                grid_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
-            ongrid_power = decoder_grid.decode_32bit_int()
+            ongrid_power_raw = decoder_grid.decode_32bit_int()
+            ongrid_power = _norm_s32(ongrid_power_raw) or 0
 
             _LOGGER.debug(
                 "Datos Batería OK: SOC=%s%%, BatPower=%sW, GridPower=%sW",
@@ -300,9 +345,11 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
             decoder_pv = BinaryPayloadDecoder.fromRegisters(
-                pv_regs.registers, byteorder=Endian.Big
+                pv_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
-            pv_power = decoder_pv.decode_32bit_int()
+            pv_power_raw = decoder_pv.decode_32bit_int()
+            pv_power = _norm_s32(pv_power_raw) or 0
+
             _LOGGER.debug("Datos FV OK: PVPower=%sW", pv_power)
 
             # --- 3. Construir Payload (Éxito) ---
@@ -420,7 +467,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             _LOGGER.debug("Telemetría Modbus SMA real obtenida.")
 
-        # 2. (opcional) Formateo para API externa: lo haces más abajo cuando toque
+        # 2. (opcional) Formateo para API externa
         telemetry_data_for_api = {
             "plant_id": str(self.plant_id),
             "bat_soc": str(telemetry_data_numeric.get(KEY_BAT_SOC, 0)),
