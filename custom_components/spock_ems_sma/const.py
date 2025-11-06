@@ -32,12 +32,12 @@ DEFAULT_MODBUS_SLAVE = 3
 DEFAULT_SCAN_INTERVAL_S = 30
 DEFAULT_SHM_GROUP = "user"
 
-# --- Registros Modbus SMA ---
-SMA_REG_BAT_POWER = 30843      
-SMA_REG_BAT_SOC = 30845        
-SMA_REG_BAT_CAPACITY = 30849   
-SMA_REG_GRID_POWER = 30867     
-SMA_REG_PV_POWER = 30775
+# --- Registros Modbus SMA (Unit 2 - System) ---
+SMA_REG_PV_POWER = 30775         # S32 FIX0, RO
+SMA_REG_BAT_SOC = 30845          # U32 FIX0, RO
+SMA_REG_GRID_POWER = 31249       # S32 FIX0, RO
+SMA_REG_BAT_CHARGE_W = 31393     # U32 FIX0, RO
+SMA_REG_BAT_DISCHARGE_W = 31395  # U32 FIX0, RO
 
 
 # --- CAMBIO: Keys para el diccionario de datos del Coordinator ---
