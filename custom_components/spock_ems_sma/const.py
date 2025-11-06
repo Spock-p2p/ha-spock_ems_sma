@@ -38,3 +38,15 @@ SMA_REG_BAT_SOC = 30845
 SMA_REG_BAT_CAPACITY = 30849   
 SMA_REG_GRID_POWER = 30867     
 SMA_REG_PV_POWER = 30775
+
+
+# --- CAMBIO: Keys para el diccionario de datos del Coordinator ---
+KEY_BAT_SOC = "bat_soc"
+KEY_BAT_POWER = "bat_power"
+KEY_PV_POWER = "pv_power"
+KEY_GRID_POWER = "ongrid_power"
+KEY_BAT_CAPACITY = "bat_capacity"
+# (Estos no tienen sensores, pero los leemos)
+KEY_BAT_CHARGE_ALLOWED = "bat_charge_allowed"
+KEY_BAT_DISCHARGE_ALLOWED = "bat_discharge_allowed"
+KEY_TOTAL_GRID_OUTPUT = "total_grid_output_energy"
