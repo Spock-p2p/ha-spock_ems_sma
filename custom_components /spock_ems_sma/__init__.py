@@ -1,4 +1,4 @@
-"""Integración Spock EMS Modbus (Plantilla)"""
+"""Integración Spock EMS SMA (Modbus)"""
 from __future__ import annotations
 
 import asyncio
@@ -22,11 +22,20 @@ from .const import (
     API_ENDPOINT,
     CONF_API_TOKEN,
     CONF_PLANT_ID,
-    CONF_MODBUS_IP,
-    CONF_MODBUS_PORT,
-    CONF_MODBUS_SLAVE,
+    CONF_BATTERY_IP,
+    CONF_BATTERY_PORT,
+    CONF_BATTERY_SLAVE,
+    CONF_PV_IP,
+    CONF_PV_PORT,
+    CONF_PV_SLAVE,
     DEFAULT_SCAN_INTERVAL_S,
     PLATFORMS,
+    # Importar registros
+    SMA_REG_BAT_POWER,
+    SMA_REG_BAT_SOC,
+    SMA_REG_BAT_CAPACITY,
+    SMA_REG_GRID_POWER,
+    SMA_REG_PV_POWER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,13 +53,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await asyncio.sleep(2)
     await coordinator.async_config_entry_first_refresh()
-    _LOGGER.info("Spock EMS Modbus: Primer fetch realizado.")
+    _LOGGER.info("Spock EMS SMA: Primer fetch realizado.")
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     _LOGGER.info(
-         "Spock EMS Modbus: Ciclo automático (gestionado por listener) iniciado cada %s.", 
+         "Spock EMS SMA: Ciclo automático (gestionado por listener) iniciado cada %s.", 
          coordinator.update_interval
     )
 
@@ -82,17 +91,29 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api_token: str = self.config[CONF_API_TOKEN]
         self.plant_id: int = self.config[CONF_PLANT_ID]
         
-        # Configuración Modbus
-        self.modbus_ip: str = self.config[CONF_MODBUS_IP]
-        self.modbus_port: int = self.config[CONF_MODBUS_PORT]
-        self.modbus_slave: int = self.config[CONF_MODBUS_SLAVE]
+        # --- Configuración Clientes Modbus ---
+        self.battery_ip: str = self.config[CONF_BATTERY_IP]
+        self.battery_port: int = self.config[CONF_BATTERY_PORT]
+        self.battery_slave: int = self.config[CONF_BATTERY_SLAVE]
         
-        # Cliente Modbus (se crea aquí pero se usa en un hilo)
-        self.modbus_client = ModbusTcpClient(
-            host=self.modbus_ip, 
-            port=self.modbus_port,
-            timeout=5 # Timeout de 5 segundos
+        # --- CAMBIO: pv_ip ya no es opcional ---
+        self.pv_ip: str = self.config[CONF_PV_IP]
+        self.pv_port: int = self.config[CONF_PV_PORT]
+        self.pv_slave: int = self.config[CONF_PV_SLAVE]
+
+        # Crear clientes Modbus
+        self.battery_client = ModbusTcpClient(
+            host=self.battery_ip, 
+            port=self.battery_port,
+            timeout=5
         )
+        # --- CAMBIO: Se crea siempre, ya no es opcional ---
+        self.pv_client = ModbusTcpClient(
+            host=self.pv_ip,
+            port=self.pv_port,
+            timeout=5
+        )
+        # --- FIN DEL CAMBIO ---
         
         self._session = async_get_clientsession(hass)
 
@@ -103,142 +124,124 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL_S),
         )
 
-    def _read_modbus_data(self) -> dict[str, str]:
+    def _read_sma_telemetry(self) -> dict[str, str]:
         """
-        [FUNCIÓN SÍNCRONA] Lee los registros Modbus del inversor.
-        
-        !!! ESTA ES LA FUNCIÓN QUE DEBES ADAPTAR PARA CADA MARCA !!!
+        [FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA.
         """
-        _LOGGER.debug("Intentando conectar a Modbus en %s:%s", self.modbus_ip, self.modbus_port)
+        _LOGGER.debug("Iniciando lectura Modbus SMA...")
         
+        # Valores por defecto
+        bat_soc = 0
+        bat_power = 0
+        pv_power = 0
+        ongrid_power = 0
+        bat_capacity = 0
+        bat_charge_allowed = True
+        bat_discharge_allowed = True
+
+        # --- 1. Leer Inversor de Batería (Obligatorio) ---
         try:
-            self.modbus_client.connect()
+            _LOGGER.debug("Conectando a Inversor Batería: %s", self.battery_ip)
+            self.battery_client.connect()
             
-            # --- INICIO DE LÓGICA DE LECTURA (EJEMPLO) ---
-            # (Estos registros son ficticios. Debes reemplazarlos
-            # por los registros reales de Growatt, SMA, etc.)
-
-            # Ejemplo: Leer 10 registros (holding registers) desde la dirección 1000
-            # (count=10 significa 10 registros de 16 bits)
-            read_result = self.modbus_client.read_holding_registers(
-                address=1000, 
-                count=10, 
-                slave=self.modbus_slave
+            bat_regs = self.battery_client.read_holding_registers(
+                address=SMA_REG_BAT_POWER, 
+                count=7, # 30843 a 30849
+                slave=self.battery_slave
             )
-            
-            if read_result.isError():
-                raise ConnectionError(f"Error al leer registros Modbus: {read_result}")
+            if bat_regs.isError():
+                raise ConnectionError(f"Error al leer registros de batería: {bat_regs}")
 
-            # Decodificar los 10 registros (20 bytes)
-            decoder = BinaryPayloadDecoder.fromRegisters(
-                read_result.registers, 
-                byteorder=Endian.Big, # O Endian.Little, depende del inversor
-                wordorder=Endian.Little
+            decoder_bat = BinaryPayloadDecoder.fromRegisters(
+                bat_regs.registers, byteorder=Endian.Big
             )
-            
-            # Ejemplo de decodificación (depende 100% del inversor)
-            bat_soc = decoder.decode_16bit_uint()       # 2 bytes
-            bat_power = decoder.decode_32bit_int()      # 4 bytes
-            pv_power = decoder.decode_32bit_int()       # 4 bytes
-            ongrid_power = decoder.decode_32bit_int()   # 4 bytes
-            bat_capacity = decoder.decode_16bit_uint()  # 2 bytes
-            
-            # Para los booleanos (esto es un ejemplo, podría ser un registro de bits)
-            # Leer un registro de estado (ej. 1010)
-            status_result = self.modbus_client.read_holding_registers(1010, 1, self.modbus_slave)
-            status_word = status_result.registers[0]
-            
-            # Asumir bit 0 para carga, bit 1 para descarga
-            bat_charge_allowed = (status_word & 0b00000001) > 0 
-            bat_discharge_allowed = (status_word & 0b00000010) > 0
-            
-            # --- FIN DE LÓGICA DE LECTURA ---
+            bat_power = decoder_bat.decode_32bit_int()    # 30843
+            bat_soc = decoder_bat.decode_32bit_uint()       # 30845
+            decoder_bat.skip_bytes(4)                       # 30847
+            bat_capacity = decoder_bat.decode_32bit_uint()  # 30849
 
-            # Construir el payload para la API de Spock
-            telemetry_data = {
-                "plant_id": str(self.plant_id),
-                "bat_soc": str(bat_soc),
-                "bat_power": str(bat_power),
-                "pv_power": str(pv_power),
-                "ongrid_power": str(ongrid_power),
-                "bat_charge_allowed": str(bat_charge_allowed).lower(),
-                "bat_discharge_allowed": str(bat_discharge_allowed).lower(),
-                "bat_capacity": str(bat_capacity),
-                "total_grid_output_energy": "0" # (No lo leímos en este ejemplo)
-            }
-            return telemetry_data
+            grid_regs = self.battery_client.read_holding_registers(
+                address=SMA_REG_GRID_POWER, 
+                count=2, # 30867
+                slave=self.battery_slave
+            )
+            if grid_regs.isError():
+                raise ConnectionError(f"Error al leer registros de red: {grid_regs}")
+            
+            decoder_grid = BinaryPayloadDecoder.fromRegisters(
+                grid_regs.registers, byteorder=Endian.Big
+            )
+            ongrid_power = decoder_grid.decode_32bit_int()
+            
+            _LOGGER.debug(f"Datos Batería OK: SOC={bat_soc}%, BatPower={bat_power}W, GridPower={ongrid_power}W")
 
         except Exception as e:
-            _LOGGER.warning(f"Error al leer datos Modbus: {e}")
-            raise # Lanzar la excepción para que _async_update_data la capture
-        
+            _LOGGER.warning(f"Error al leer datos del inversor de batería SMA: {e}")
+            raise # Lanzar excepción para que _async_update_data la capture
         finally:
-            # Asegurarse de cerrar la conexión
-            if self.modbus_client.is_socket_open():
-                self.modbus_client.close()
-            _LOGGER.debug("Conexión Modbus cerrada.")
+            if self.battery_client.is_socket_open():
+                self.battery_client.close()
+
+        # --- 2. Leer Inversor FV (Obligatorio) ---
+        # --- CAMBIO: Ya no es opcional, se ejecuta siempre ---
+        try:
+            _LOGGER.debug("Conectando a Inversor FV: %s", self.pv_ip)
+            self.pv_client.connect()
+            
+            pv_regs = self.pv_client.read_holding_registers(
+                address=SMA_REG_PV_POWER, 
+                count=2, # 30775
+                slave=self.pv_slave
+            )
+            if pv_regs.isError():
+                raise ConnectionError(f"Error al leer registros FV: {pv_regs}")
+
+            decoder_pv = BinaryPayloadDecoder.fromRegisters(
+                pv_regs.registers, byteorder=Endian.Big
+            )
+            pv_power = decoder_pv.decode_32bit_int()
+            _LOGGER.debug(f"Datos FV OK: PVPower={pv_power}W")
+            
+        except Exception as e:
+            # Si falla el FV, AHORA SÍ lanzamos una excepción
+            _LOGGER.warning(f"No se pudo leer el inversor FV en {self.pv_ip}: {e}")
+            raise # Lanzar excepción para que _async_update_data la capture
+        finally:
+            if self.pv_client.is_socket_open():
+                self.pv_client.close()
+        # --- FIN DEL CAMBIO ---
+
+        # --- 3. Construir Payload ---
+        telemetry_data = {
+            "plant_id": str(self.plant_id),
+            "bat_soc": str(bat_soc),
+            "bat_power": str(bat_power),
+            "pv_power": str(pv_power),
+            "ongrid_power": str(ongrid_power),
+            "bat_charge_allowed": str(bat_charge_allowed).lower(),
+            "bat_discharge_allowed": str(bat_discharge_allowed).lower(),
+            "bat_capacity": str(bat_capacity),
+            "total_grid_output_energy": "0" # (Lectura pendiente)
+        }
+        return telemetry_data
+
 
     def _write_modbus_commands(self, commands: dict[str, Any]) -> None:
         """
         [FUNCIÓN SÍNCRONA] Escribe los comandos de la API en el inversor.
-        
-        !!! ESTA ES LA FUNCIÓN QUE DEBES ADAPTAR PARA CADA MARCA !!!
+        ADVERTENCIA: SMA NO USA MODBUS PARA ESCRITURA DE BATERÍA.
         """
-        _LOGGER.debug("Recibidos comandos de la API para escribir en Modbus: %s", commands)
-        
-        try:
-            self.modbus_client.connect()
-
-            # --- INICIO DE LÓGICA DE ESCRITURA (EJEMPLO) ---
-            operation = commands.get("battery_operation")
-            action = commands.get("action")
-            amount = commands.get("amount", 0)
-
-            # Ejemplo: Escribir en un registro para forzar carga/descarga
-            # (¡REGISTROS Y VALORES FICTICIOS!)
-            
-            if operation == "manual" and action == "charge":
-                _LOGGER.info("Enviando comando Modbus: Forzar Carga")
-                # Ejemplo: Escribir el valor 1 en el registro 2000
-                self.modbus_client.write_register(
-                    address=2000, 
-                    value=1, 
-                    slave=self.modbus_slave
-                )
-                
-            elif operation == "manual" and action == "discharge":
-                _LOGGER.info("Enviando comando Modbus: Forzar Descarga")
-                # Ejemplo: Escribir el valor 2 en el registro 2000
-                self.modbus_client.write_register(
-                    address=2000, 
-                    value=2, 
-                    slave=self.modbus_slave
-                )
-                
-            elif operation == "auto":
-                _LOGGER.info("Enviando comando Modbus: Modo Automático")
-                # Ejemplo: Escribir el valor 0 en el registro 2000
-                self.modbus_client.write_register(
-                    address=2000, 
-                    value=0, 
-                    slave=self.modbus_slave
-                )
-            
-            # --- FIN DE LÓGICA DE ESCRITURA ---
-
-        except Exception as e:
-            _LOGGER.error(f"Error al escribir comandos Modbus: {e}")
-            raise
-        finally:
-            if self.modbus_client.is_socket_open():
-                self.modbus_client.close()
-            _LOGGER.debug("Conexión Modbus cerrada.")
+        _LOGGER.warning(
+            "Se ha llamado a la función de escritura Modbus para SMA, "
+            "pero SMA no soporta control de batería vía Modbus TCP. "
+            "Esta función es solo una plantilla y no tendrá efecto."
+        )
+        pass
 
 
     async def _async_update_data(self) -> dict[str, Any]:
         """
-        Ciclo de actualización unificado (Versión Modbus)
-        """
+Main update loop"""
         
         entry_id = self.config_entry.entry_id
         is_enabled = self.hass.data[DOMAIN].get(entry_id, {}).get("is_enabled", True)
@@ -247,20 +250,18 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Sondeo Modbus deshabilitado por el interruptor. Omitiendo ciclo.")
             return self.data 
 
-        _LOGGER.debug("Iniciando ciclo de actualización Modbus...")
+        _LOGGER.debug("Iniciando ciclo de actualización Modbus SMA...")
         
         telemetry_data: dict[str, str] = {}
         
         try:
-            # 1. Ejecutar la lectura Modbus (síncrona) en un hilo
             telemetry_data = await self.hass.async_add_executor_job(
-                self._read_modbus_data
+                self._read_sma_telemetry
             )
-            _LOGGER.debug("Telemetría Modbus real obtenida.")
+            _LOGGER.debug("Telemetría Modbus SMA real obtenida.")
 
         except Exception as e:
-            # 2. Si Modbus falla, enviar ceros (heartbeat)
-            _LOGGER.warning(f"No se pudo obtener telemetría de Modbus: {e}. Enviando telemetría a cero.")
+            _LOGGER.warning(f"No se pudo obtener telemetría de SMA Modbus: {e}. Enviando telemetría a cero.")
             telemetry_data = {
                 "plant_id": str(self.plant_id),
                 "bat_soc": "0", "bat_power": "0", "pv_power": "0",
@@ -269,7 +270,6 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "total_grid_output_energy": "0"
             }
         
-        # 3. Enviar telemetría (real o cero) a la API de Spock
         _LOGGER.debug("Enviando telemetría a Spock API: %s", telemetry_data)
         headers = {"X-Auth-Token": self.api_token}
         
@@ -287,7 +287,6 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     _LOGGER.error("API error %s: %s", resp.status, txt)
                     raise UpdateFailed(f"Error de API (HTTP {resp.status})")
 
-                # Recibimos los comandos de la API
                 command_data = await resp.json(content_type=None)
                 
                 if not isinstance(command_data, dict):
@@ -296,15 +295,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 _LOGGER.debug("Comandos recibidos: %s", command_data)
                 
-                # --- CAMBIO: Comentada la llamada a la escritura ---
-                # 4. Procesar comandos (si hay algo que hacer)
-                # (Comprobamos 'status' por si la API devuelve "ok")
-                # if command_data.get("action") != "none" or command_data.get("status") == "ok":
-                #    _LOGGER.debug("Llamando a _write_modbus_commands (actualmente deshabilitado en código)")
-                #    # await self.hass.async_add_executor_job(
-                #    #     self._write_modbus_commands, command_data
-                #    # )
-                # --- FIN DEL CAMBIO ---
+                # (Lógica de escritura comentada)
                 
                 return command_data
 
