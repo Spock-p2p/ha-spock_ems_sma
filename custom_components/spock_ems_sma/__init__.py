@@ -11,12 +11,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-# --- Imports de Modbus (Corregidos para Pymodbus v3.x) ---
+# --- Imports de Modbus (compatibles) ---
 from pymodbus.client import ModbusTcpClient
-from pymodbus.utilities import Endian  # <-- CAMBIO: Ruta v3.x
-from pymodbus.payload import BinaryPayloadDecoder # <-- CAMBIO: Ruta v3.x
-from pymodbus.payload import BinaryPayloadBuilder # <-- CAMBIO: Ruta v3.x
-# --- FIN DE CAMBIOS ---
+from .compat_pymodbus import Endian
+from pymodbus.payload import BinaryPayloadDecoder, BinaryPayloadBuilder
+# --- FIN ---
 
 from .const import (
     DOMAIN,
