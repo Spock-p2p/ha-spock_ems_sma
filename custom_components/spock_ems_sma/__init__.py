@@ -176,6 +176,11 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.shm_group: str | None = self.config.get(CONF_SHM_GROUP)
         self.shm_password: str | None = self.config.get(CONF_SHM_PASSWORD)
 
+        # --- Compat con switch.py: mantener attrs de batería aunque no se usen ---
+        self.battery_ip = self.config.get(CONF_BATTERY_IP)        # puede ser None
+        self.battery_port = self.config.get(CONF_BATTERY_PORT)    # puede ser None
+        self.battery_slave = self.config.get(CONF_BATTERY_SLAVE)  # puede ser None
+
         self._session = async_get_clientsession(hass)
 
         super().__init__(
