@@ -14,7 +14,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 # --- Imports de Modbus (compatibles) ---
 from pymodbus.client import ModbusTcpClient
 from .compat_pymodbus import Endian
-from pymodbus.payload import BinaryPayloadDecoder, BinaryPayloadBuilder
+
+try:
+    from pymodbus.payload import BinaryPayloadDecoder, BinaryPayloadBuilder  # PyModbus < 3.11
+except Exception:
+    from .compat_payload import BinaryPayloadDecoder, BinaryPayloadBuilder  # Shim local
+
 # --- FIN ---
 
 from .const import (
