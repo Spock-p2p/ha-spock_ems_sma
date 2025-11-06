@@ -11,7 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-# --- Imports de Modbus (Volvemos a la v2) ---
+# --- Imports de Modbus (Corregidos para Pymodbus v2.x) ---
 from pymodbus.client import ModbusTcpClient
 from pymodbus.constants import Endian  # <-- CAMBIO: Volvemos a 'constants'
 from pymodbus.payload import BinaryPayloadDecoder # <-- CAMBIO: Volvemos a 'payload'
@@ -83,7 +83,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         # Inicializa el coordinador.
         self.config_entry = entry
-        self.config = {**self.config_entry.data, **self.config_entry.options}
+        self.config = {**entry.data, **entry.options}
         self.api_token: str = self.config[CONF_API_TOKEN]
         self.plant_id: int = self.config[CONF_PLANT_ID]
         
@@ -106,6 +106,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _read_sma_telemetry(self) -> dict[str, str] | None:
         # [FUNCIÓN SÍNCRONA] Lee los registros Modbus de los inversores SMA.
+        # Devuelve 'None' si la lectura falla.
         
         _LOGGER.debug("Iniciando lectura Modbus SMA...")
         
