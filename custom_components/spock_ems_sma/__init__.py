@@ -140,7 +140,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise ConnectionError(f"Error al leer registros de batería: {bat_regs}")
 
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
-                bat_regs.registers, byteorder=Endian.BIG # CAMBIO: 'Endian' (Clase) en lugar de 'Endian.Big' (string)
+                bat_regs.registers, byteorder=Endian.BIG 
             )
             bat_power = decoder_bat.decode_32bit_int()
             bat_soc = decoder_bat.decode_32bit_uint()
@@ -210,4 +210,82 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _write_modbus_commands(self, commands: dict[str, Any]) -> None:
         """
         [FUNCIÓN SÍNCRONA] Escribe los comandos de la API en el inversor.
-        ADVERTENCIA: SMA NO USA
+        ADVERTENCIA: SMA NO USA MODBUS PARA ESCRITURA DE BATERÍA.
+        """
+        _LOGGER.warning(
+            "Se ha llamado a la función de escritura Modbus para SMA, "
+            "pero SMA no soporta control de batería vía Modbus TCP. "
+            "Esta función es solo una plantilla y no tendrá efecto."
+        )
+        pass
+
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """
+        Ciclo de actualización unificado (Versión Modbus)
+        """
+        
+        entry_id = self.config_entry.entry_id
+        is_enabled = self.hass.data[DOMAIN].get(entry_id, {}).get("is_enabled", True)
+        
+        if not is_enabled:
+            _LOGGER.debug("Sondeo Modbus deshabilitado por el interruptor. Omitiendo ciclo.")
+            if self.data is None: 
+                 return {} 
+            return self.data 
+
+        _LOGGER.debug("Iniciando ciclo de actualización Modbus SMA...")
+        
+        telemetry_data: dict[str, str] = {}
+        
+        telemetry_data_or_none = await self.hass.async_add_executor_job(
+            self._read_sma_telemetry
+        )
+
+        if telemetry_data_or_none is None:
+            _LOGGER.debug("Construyendo telemetría a cero por fallo de Modbus.")
+            telemetry_data = {
+                "plant_id": str(self.plant_id),
+                "bat_soc": "0", "bat_power": "0", "pv_power": "0",
+                "ongrid_power": "0", "bat_charge_allowed": "false",
+                "bat_discharge_allowed": "false", "bat_capacity": "0",
+                "total_grid_output_energy": "0"
+            }
+        else:
+            _LOGGER.debug("Telemetría Modbus SMA real obtenida.")
+            telemetry_data = telemetry_data_or_none
+        
+        _LOGGER.debug("Enviando telemetría a Spock API: %s", telemetry_data)
+        headers = {"X-Auth-Token": self.api_token}
+        
+        try:
+            async with self._session.post(
+                API_ENDPOINT, 
+                headers=headers, 
+                json=telemetry_data 
+            ) as resp:
+                
+                if resp.status == 403:
+                    raise UpdateFailed("API Token inválido (403)")
+                if resp.status != 200:
+                    txt = await resp.text()
+                    _LOGGER.error("API error %s: %s", resp.status, txt)
+                    raise UpdateFailed(f"Error de API (HTTP {resp.status})")
+
+                command_data = await resp.json(content_type=None)
+                
+                if not isinstance(command_data, dict):
+                    _LOGGER.warning("Respuesta de API inesperada (no es un dict): %s", command_data)
+                    raise UpdateFailed("Respuesta de API inesperada")
+
+                _LOGGER.debug("Comandos recibidos: %s", command_data)
+                
+                # (Lógica de escritura comentada)
+                
+                return command_data
+
+        except UpdateFailed:
+            raise
+        except Exception as err:
+            _LOGGER.error("Error en el ciclo de actualización (API POST): %s", err)
+            raise UpdateFailed(f"Error en el ciclo de actualización (API POST): {err}") from err
