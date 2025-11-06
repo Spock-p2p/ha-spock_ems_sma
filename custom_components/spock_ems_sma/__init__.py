@@ -61,38 +61,51 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 # ===============================
-# Compat helpers para PyModbus
+# Compat helpers para PyModbus (KW-only, sin posicionales)
 # ===============================
 
 def _mb_read(method, address: int, count: int, unit_id: int, **kwargs):
-    """Llama al método Modbus de lectura probando unit=, luego slave= y por último posicional."""
+    """
+    Llama a read_* probando primero unit=, luego slave= y, si el cliente
+    no acepta id de unidad, sin él. Nunca usa argumentos posicionales
+    para 'count' ni para la unidad, porque hay builds que los prohíben.
+    """
+    # 1) PyModbus 3.x frecuentes (count kw-only + unit)
     try:
-        return method(address, count, unit=unit_id, **kwargs)   # PyModbus 3.x
+        return method(address, count=count, unit=unit_id, **kwargs)
     except TypeError:
+        # 2) PyModbus 2.x (count kw-only + slave)
         try:
-            return method(address, count, slave=unit_id, **kwargs)  # PyModbus 2.x
+            return method(address, count=count, slave=unit_id, **kwargs)
         except TypeError:
-            return method(address, count, unit_id, **kwargs)    # Algunas builds sólo posicional
+            # 3) Algunos clientes ignoran el id de unidad: probar sin él
+            return method(address, count=count, **kwargs)
 
 
 def _mb_write_single(method, address: int, value: int, unit_id: int, **kwargs):
+    # 1) unit=
     try:
-        return method(address, value, unit=unit_id, **kwargs)
+        return method(address, value=value, unit=unit_id, **kwargs)
     except TypeError:
+        # 2) slave=
         try:
-            return method(address, value, slave=unit_id, **kwargs)
+            return method(address, value=value, slave=unit_id, **kwargs)
         except TypeError:
-            return method(address, value, unit_id, **kwargs)
+            # 3) sin id de unidad
+            return method(address, value=value, **kwargs)
 
 
 def _mb_write_multi(method, address: int, values, unit_id: int, **kwargs):
+    # 1) unit=
     try:
-        return method(address, values, unit=unit_id, **kwargs)
+        return method(address, values=values, unit=unit_id, **kwargs)
     except TypeError:
+        # 2) slave=
         try:
-            return method(address, values, slave=unit_id, **kwargs)
+            return method(address, values=values, slave=unit_id, **kwargs)
         except TypeError:
-            return method(address, values, unit_id, **kwargs)
+            # 3) sin id de unidad
+            return method(address, values=values, **kwargs)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
