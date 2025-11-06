@@ -111,13 +111,26 @@ def _mb_write_multi(method, address: int, values, unit_id: int, **kwargs):
             return method(address, values=values, **kwargs)
 
 
+def _is_all_ffff(resp) -> bool:
+    regs = getattr(resp, "registers", None)
+    if not isinstance(regs, list) or not regs:
+        return False
+    return all((r & 0xFFFF) == 0xFFFF for r in regs)
+
+
 def _try_read_register_block(client, reg: int, count: int, unit_id: int):
     """
-    Intenta leer 'reg' con combinaciones típicas:
-    - Holding con base 40001 y 40000
-    - Input con base 30001 y 30000
-    Devuelve la primera respuesta válida (sin isError).
+    Busca una lectura válida probando:
+      - Unit IDs: [unit_id, 3, 126, 1]
+      - Función/offset: holding[40001,40000], input[30001,30000]
+    Descarta respuestas con registers = [0xFFFF, ...].
+    Devuelve (kind, addr, unit_used, resp)
     """
+    unit_candidates = []
+    for u in (unit_id, 3, 126, 1):
+        if u is not None and u not in unit_candidates:
+            unit_candidates.append(u)
+
     attempts = [
         ("holding", reg - 40001),
         ("holding", reg - 40000),
@@ -125,55 +138,59 @@ def _try_read_register_block(client, reg: int, count: int, unit_id: int):
         ("input", reg - 30000),
     ]
 
-    for kind, addr in attempts:
-        try:
-            if addr < 0:
-                continue
-            if kind == "holding":
-                resp = _mb_read(
-                    client.read_holding_registers,
-                    address=addr,
-                    count=count,
-                    unit_id=unit_id,
-                )
-            else:
-                resp = _mb_read(
-                    client.read_input_registers,
-                    address=addr,
-                    count=count,
-                    unit_id=unit_id,
-                )
+    last_exc = None
+    for u in unit_candidates:
+        for kind, addr in attempts:
+            try:
+                if addr < 0:
+                    continue
+                if kind == "holding":
+                    resp = _mb_read(
+                        client.read_holding_registers,
+                        address=addr,
+                        count=count,
+                        unit_id=u,
+                    )
+                else:
+                    resp = _mb_read(
+                        client.read_input_registers,
+                        address=addr,
+                        count=count,
+                        unit_id=u,
+                    )
 
-            # Algunas builds devuelven objeto con isError(); otras lanzan excepción.
-            if hasattr(resp, "isError") and resp.isError():
+                if hasattr(resp, "isError") and resp.isError():
+                    _LOGGER.debug(
+                        "Intento %s@%s unit=%s devolvió excepción Modbus: %s",
+                        kind, addr, u, resp,
+                    )
+                    continue
+
+                if _is_all_ffff(resp):
+                    _LOGGER.debug(
+                        "Intento %s@%s unit=%s -> todo 0xFFFF (descartado)",
+                        kind, addr, u,
+                    )
+                    continue
+
                 _LOGGER.debug(
-                    "Intento %s@%s (unit=%s) devolvió excepción Modbus: %s",
-                    kind,
-                    addr,
-                    unit_id,
-                    resp,
+                    "Lectura OK con %s@%s unit=%s, reg lógico %s, count=%s, regs=%s",
+                    kind, addr, u, reg, count, getattr(resp, "registers", None),
+                )
+                return kind, addr, u, resp
+
+            except Exception as e:
+                last_exc = e
+                _LOGGER.debug(
+                    "Intento %s@%s unit=%s falló: %s", kind, addr, u, e,
                 )
                 continue
-
-            _LOGGER.debug(
-                "Lectura OK con %s@%s (unit=%s), reg lógico %s, count=%s",
-                kind,
-                addr,
-                unit_id,
-                reg,
-                count,
-            )
-            return kind, addr, resp
-        except Exception as e:
-            _LOGGER.debug(
-                "Intento %s@%s (unit=%s) falló: %s", kind, addr, unit_id, e
-            )
-            continue
 
     raise ConnectionError(
-        f"No se pudo leer reg {reg} count {count} (unit {unit_id}) "
-        f"con ninguna combinación de función/offset estándar."
+        f"No se pudo leer reg {reg} count {count} con ninguna combinación "
+        f"(último error: {last_exc})"
     )
+
 
 # --- Normalización de valores SMA ---
 INVALID_16 = {0xFFFF}
@@ -264,7 +281,9 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         battery_client = ModbusTcpClient(
             host=self.battery_ip, port=self.battery_port, timeout=5
         )
-        pv_client = ModbusTcpClient(host=self.pv_ip, port=self.pv_port, timeout=5)
+        pv_client = ModbusTcpClient(
+            host=self.pv_ip, port=self.pv_port, timeout=5
+        )
 
         try:
             bat_soc = 0
@@ -279,54 +298,78 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Conectando a Inversor Batería: %s", self.battery_ip)
             battery_client.connect()
 
-            kind_bat, addr_bat, bat_regs = _try_read_register_block(
+            kind_bat, addr_bat, unit_bat, bat_regs = _try_read_register_block(
                 battery_client, SMA_REG_BAT_POWER, 8, self.battery_slave
             )
+            _LOGGER.debug(
+                "BAT elegido -> kind=%s addr=%s unit=%s",
+                kind_bat, addr_bat, unit_bat,
+            )
 
-            # --- DIAGNÓSTICO: dump + decodificaciones alternativas ---
-            _LOGGER.debug("BAT regs raw: %s", getattr(bat_regs, "registers", None))
-            
+            # (Bloque de diagnóstico opcional)
             def _try_decode32(regs, byteorder, wordorder):
                 try:
-                    dec = BinaryPayloadDecoder.fromRegisters(regs, byteorder=byteorder, wordorder=wordorder)
+                    dec = BinaryPayloadDecoder.fromRegisters(
+                        regs, byteorder=byteorder, wordorder=wordorder
+                    )
                     v1 = dec.decode_32bit_int()
                     v2 = dec.decode_32bit_uint()
-                    v3 = BinaryPayloadDecoder.fromRegisters(regs[2:4], byteorder=byteorder, wordorder=wordorder).decode_32bit_uint()
-                    v4 = BinaryPayloadDecoder.fromRegisters(regs[6:8], byteorder=byteorder, wordorder=wordorder).decode_32bit_uint()
+                    v3 = BinaryPayloadDecoder.fromRegisters(
+                        regs[2:4], byteorder=byteorder, wordorder=wordorder
+                    ).decode_32bit_uint()
+                    v4 = BinaryPayloadDecoder.fromRegisters(
+                        regs[6:8], byteorder=byteorder, wordorder=wordorder
+                    ).decode_32bit_uint()
                     return v1, v2, v3, v4
                 except Exception as e:
                     return f"error:{e}", None, None, None
-            
+
             for bo, wo, tag in [
                 (Endian.Big, Endian.Big, "BB"),
                 (Endian.Big, Endian.Little, "BL"),
                 (Endian.Little, Endian.Big, "LB"),
                 (Endian.Little, Endian.Little, "LL"),
             ]:
-                p, soc32, soc32_alt, cap = _try_decode32(bat_regs.registers, bo, wo)
-                _LOGGER.debug("BAT decode %s -> P=%s, SOC32=%s, SOC32_alt=%s, CAP=%s", tag, p, soc32, soc32_alt, cap)
-            
+                p, soc32, soc32_alt, cap = _try_decode32(
+                    bat_regs.registers, bo, wo
+                )
+                _LOGGER.debug(
+                    "BAT decode %s -> P=%s, SOC32=%s, SOC32_alt=%s, CAP=%s",
+                    tag, p, soc32, soc32_alt, cap,
+                )
+
             # SOC u16 directo (por si ese es el bueno) y con posible escala 0.1
             try:
-                _LOGGER.debug("SOC16 regs raw: %s", getattr(soc16_regs, "registers", None))
+                _LOGGER.debug(
+                    "SOC16 regs raw: %s",
+                    getattr(soc16_regs, "registers", None),
+                )
             except NameError:
-                # leer por si no se ha leído aún
-                _, _, soc16_regs = _try_read_register_block(battery_client, SMA_REG_BAT_SOC, 1, self.battery_slave)
-                _LOGGER.debug("SOC16 regs raw: %s", getattr(soc16_regs, "registers", None))
-            
+                _, _, soc16_regs = _try_read_register_block(
+                    battery_client, SMA_REG_BAT_SOC, 1, self.battery_slave
+                )
+                _LOGGER.debug(
+                    "SOC16 regs raw: %s",
+                    getattr(soc16_regs, "registers", None),
+                )
+
             try:
-                dec_soc16 = BinaryPayloadDecoder.fromRegisters(soc16_regs.registers, byteorder=Endian.Big)
+                dec_soc16 = BinaryPayloadDecoder.fromRegisters(
+                    soc16_regs.registers, byteorder=Endian.Big
+                )
                 soc16_val = dec_soc16.decode_16bit_uint()
-                _LOGGER.debug("SOC16 u16=%s, u16_scaled(0.1)=%s%%", soc16_val, soc16_val / 10.0)
+                _LOGGER.debug(
+                    "SOC16 u16=%s, u16_scaled(0.1)=%s%%",
+                    soc16_val, soc16_val / 10.0,
+                )
             except Exception as e:
                 _LOGGER.debug("SOC16 decode error: %s", e)
             # --- FIN DIAGNÓSTICO ---
-            
 
             decoder_bat = BinaryPayloadDecoder.fromRegisters(
                 bat_regs.registers, byteorder=Endian.Big, wordorder=Endian.Little
             )
-            # orden esperada: INT32 potencia, UINT32 SOC, skip 4 bytes, UINT32 capacity
+            # Orden esperada: INT32 potencia, UINT32 SOC, skip 4 bytes, UINT32 capacity
             bat_power_raw = decoder_bat.decode_32bit_int()
             bat_soc_raw = decoder_bat.decode_32bit_uint()
             decoder_bat.skip_bytes(4)
@@ -359,8 +402,12 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if bat_capacity is None:
                 bat_capacity = 0
 
-            kind_grid, addr_grid, grid_regs = _try_read_register_block(
+            kind_grid, addr_grid, unit_grid, grid_regs = _try_read_register_block(
                 battery_client, SMA_REG_GRID_POWER, 2, self.battery_slave
+            )
+            _LOGGER.debug(
+                "GRID elegido -> kind=%s addr=%s unit=%s",
+                kind_grid, addr_grid, unit_grid,
             )
 
             decoder_grid = BinaryPayloadDecoder.fromRegisters(
@@ -371,17 +418,19 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             _LOGGER.debug(
                 "Datos Batería OK: SOC=%s%%, BatPower=%sW, GridPower=%sW",
-                bat_soc,
-                bat_power,
-                ongrid_power,
+                bat_soc, bat_power, ongrid_power,
             )
 
             # --- 2. Leer Inversor FV (Obligatorio) ---
             _LOGGER.debug("Conectando a Inversor FV: %s", self.pv_ip)
             pv_client.connect()
 
-            kind_pv, addr_pv, pv_regs = _try_read_register_block(
+            kind_pv, addr_pv, unit_pv, pv_regs = _try_read_register_block(
                 pv_client, SMA_REG_PV_POWER, 2, self.pv_slave
+            )
+            _LOGGER.debug(
+                "PV elegido -> kind=%s addr=%s unit=%s",
+                kind_pv, addr_pv, unit_pv,
             )
 
             decoder_pv = BinaryPayloadDecoder.fromRegisters(
