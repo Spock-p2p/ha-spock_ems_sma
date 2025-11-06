@@ -127,7 +127,7 @@ def _try_read_register_block(client, reg: int, count: int, unit_id: int):
     Devuelve (kind, addr, unit_used, resp)
     """
     unit_candidates = []
-    for u in (unit_id, 3, 126, 1):
+    for u in (unit_id, 126, 3, 2, 1, 10):
         if u is not None and u not in unit_candidates:
             unit_candidates.append(u)
 
@@ -297,6 +297,38 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # --- 1. Leer Inversor de Batería (Obligatorio) ---
             _LOGGER.debug("Conectando a Inversor Batería: %s", self.battery_ip)
             battery_client.connect()
+
+            # --- ESCANEO DIRIGIDO (TEMPORAL) ---
+            try:
+                hit_count = 0
+                for kind in ("input", "holding"):
+                    for base, tag in ((30001, "30001"), (30000, "30000"), (40001, "40001"), (40000, "40000")):
+                        for u in (self.battery_slave, 126, 3, 2, 1, 10):
+                            for logical in range(30800, 30901, 2):  # 30800..30900
+                                addr = logical - base
+                                if addr < 0:
+                                    continue
+                                # usa el wrapper de lectura
+                                if kind == "input":
+                                    resp = _mb_read(battery_client.read_input_registers, address=addr, count=2, unit_id=u)
+                                else:
+                                    resp = _mb_read(battery_client.read_holding_registers, address=addr, count=2, unit_id=u)
+                                if hasattr(resp, "isError") and resp.isError():
+                                    continue
+                                regs = getattr(resp, "registers", None)
+                                if not regs or all((r & 0xFFFF) == 0xFFFF for r in regs):
+                                    continue
+                                _LOGGER.debug("SCAN HIT kind=%s base=%s unit=%s logical=%s addr=%s regs=%s",
+                                              kind, tag, u, logical, addr, regs)
+                                hit_count += 1
+                                if hit_count >= 12:  # no inundar logs
+                                    raise StopIteration
+            except StopIteration:
+                pass
+            except Exception as e:
+                _LOGGER.debug("Escaneo dirigido falló: %s", e)
+            # --- FIN ESCANEO DIRIGIDO ---
+            
 
             kind_bat, addr_bat, unit_bat, bat_regs = _try_read_register_block(
                 battery_client, SMA_REG_BAT_POWER, 8, self.battery_slave
