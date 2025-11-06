@@ -3,7 +3,7 @@
         "step": {
             "user": {
                 "title": "Configuración de Spock EMS (SMA)",
-                "description": "Introduce los detalles de tu API de Spock y las IPs de tus inversores SMA.",
+                "description": "Introduce los detalles de tu API de Spock y las IPs de tus inversores SMA. Los campos del Home Manager son opcionales (solo para escritura).",
                 "data": {
                     "api_token": "Spock EMS API Token",
                     "plant_id": "Spock EMS ID de Planta",
@@ -12,7 +12,10 @@
                     "battery_slave": "ID Esclavo Batería",
                     "pv_ip": "IP Inversor FV (Ej. Sunny Boy)",
                     "pv_port": "Puerto Modbus FV",
-                    "pv_slave": "ID Esclavo FV"
+                    "pv_slave": "ID Esclavo FV",
+                    "shm_ip": "IP Sunny Home Manager (Opcional, para escritura)",
+                    "shm_group": "Grupo de Usuario SHM (ej: user)",
+                    "shm_password": "Contraseña de Usuario SHM"
                 }
             }
         },
@@ -32,7 +35,10 @@
                     "battery_slave": "ID Esclavo Batería",
                     "pv_ip": "IP Inversor FV",
                     "pv_port": "Puerto Modbus FV",
-                    "pv_slave": "ID Esclavo FV"
+                    "pv_slave": "ID Esclavo FV",
+                    "shm_ip": "IP Sunny Home Manager (Opcional, para escritura)",
+                    "shm_group": "Grupo de Usuario SHM (ej: user)",
+                    "shm_password": "Contraseña de Usuario SHM"
                 }
             }
         }
@@ -41,6 +47,23 @@
         "switch": {
             "polling_enabled": {
                 "name": "Habilitar Sondeo Modbus/API"
+            }
+        },
+        "sensor": {
+            "bat_soc": {
+                "name": "SOC Batería"
+            },
+            "bat_power": {
+                "name": "Potencia Batería"
+            },
+            "pv_power": {
+                "name": "Potencia FV"
+            },
+            "ongrid_power": {
+                "name": "Potencia Red"
+            },
+            "bat_capacity": {
+                "name": "Capacidad Batería"
             }
         }
     }
