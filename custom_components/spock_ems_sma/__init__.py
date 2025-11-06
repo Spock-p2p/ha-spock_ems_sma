@@ -107,6 +107,47 @@ def _mb_write_multi(method, address: int, values, unit_id: int, **kwargs):
             # 3) sin id de unidad
             return method(address, values=values, **kwargs)
 
+def _try_read_register_block(client, reg: int, count: int, unit_id: int):
+    """
+    Intenta leer 'reg' con todas las combinaciones típicas:
+    - Holding con base 40001 y 40000
+    - Input con base 30001 y 30000
+    Devuelve la primera respuesta válida (sin isError).
+    """
+    attempts = [
+        ("holding", reg - 40001),
+        ("holding", reg - 40000),
+        ("input",   reg - 30001),
+        ("input",   reg - 30000),
+    ]
+
+    for kind, addr in attempts:
+        try:
+            if addr < 0:
+                continue
+            if kind == "holding":
+                resp = _mb_read(client.read_holding_registers, address=addr, count=count, unit_id=unit_id)
+            else:
+                resp = _mb_read(client.read_input_registers, address=addr, count=count, unit_id=unit_id)
+
+            # Algunas builds devuelven objeto con isError(); otras lanzan excepción.
+            if hasattr(resp, "isError") and resp.isError():
+                _LOGGER.debug("Intento %s@%s (unit=%s) devolvió excepción Modbus: %s",
+                              kind, addr, unit_id, resp)
+                continue
+
+            _LOGGER.debug("Lectura OK con %s@%s (unit=%s), reg lógico %s, count=%s",
+                          kind, addr, unit_id, reg, count)
+            return kind, addr, resp
+        except Exception as e:
+            _LOGGER.debug("Intento %s@%s (unit=%s) falló: %s", kind, addr, unit_id, e)
+            continue
+
+    raise ConnectionError(
+        f"No se pudo leer reg {reg} count {count} (unit {unit_id}) "
+        f"con ninguna combinación de función/offset estándar."
+    )
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Configura la integración desde la entrada de configuración.
