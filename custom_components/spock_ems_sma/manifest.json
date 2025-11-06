@@ -2,7 +2,7 @@
     "domain": "spock_ems_sma",
     "name": "Spock EMS (SMA)",
     "config_flow": true,
-    "documentation": "https"
+    "documentation": "https://github.com/Spock-p2p/ha-spock_ems_sma",
     "iot_class": "local_polling",
     "version": "1.0.0",
     "codeowners": ["@spock-p2p"],
