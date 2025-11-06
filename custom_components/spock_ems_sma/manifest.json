@@ -7,7 +7,7 @@
     "version": "1.0.0",
     "codeowners": ["@spock-p2p"],
     "requirements": [
-        "pymodbus",
+        "pymodbus==3.8.6",
         "pysma"
     ],
     "dependencies": [],
