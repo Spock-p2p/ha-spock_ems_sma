@@ -136,7 +136,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             bat_regs = battery_client.read_holding_registers(
                 address=SMA_REG_BAT_POWER, 
                 count=7,
-                slave=self.battery_slave
+                unit=self.battery_slave
             )
             if bat_regs.isError():
                 raise ConnectionError(f"Error al leer registros de batería: {bat_regs}")
@@ -152,7 +152,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             grid_regs = battery_client.read_holding_registers(
                 address=SMA_REG_GRID_POWER, 
                 count=2,
-                slave=self.battery_slave
+                unit=self.battery_slave
             )
             if grid_regs.isError():
                 raise ConnectionError(f"Error al leer registros de red: {grid_regs}")
@@ -171,7 +171,7 @@ class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pv_regs = pv_client.read_holding_registers(
                 address=SMA_REG_PV_POWER, 
                 count=2,
-                slave=self.pv_slave
+                unit=self.pv_slave
             )
             if pv_regs.isError():
                 raise ConnectionError(f"Error al leer registros FV: {pv_regs}")
