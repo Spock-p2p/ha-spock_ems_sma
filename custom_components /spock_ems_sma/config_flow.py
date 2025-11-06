@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigFlow, ConfigEntry, OptionsFlow
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.const import CONF_PASSWORD
 
 from .const import (
     DOMAIN,
@@ -22,6 +23,12 @@ from .const import (
     CONF_PV_SLAVE,
     DEFAULT_MODBUS_PORT,
     DEFAULT_MODBUS_SLAVE,
+    # --- CAMBIO ---
+    CONF_SHM_IP,
+    CONF_SHM_GROUP,
+    CONF_SHM_PASSWORD,
+    DEFAULT_SHM_GROUP,
+    # --- FIN CAMBIO ---
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,7 +51,8 @@ class SpockEmsSmaConfigFlow(ConfigFlow, domain=DOMAIN):
                 title=f"Spock EMS SMA ({user_input[CONF_BATTERY_IP]})",
                 data=user_input,
             )
-
+        
+        # --- CAMBIO: Añadidos campos opcionales de SHM ---
         STEP_USER_DATA_SCHEMA = vol.Schema(
             {
                 vol.Required(CONF_API_TOKEN): str,
@@ -52,13 +60,16 @@ class SpockEmsSmaConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_BATTERY_IP): str,
                 vol.Optional(CONF_BATTERY_PORT, default=DEFAULT_MODBUS_PORT): int,
                 vol.Optional(CONF_BATTERY_SLAVE, default=DEFAULT_MODBUS_SLAVE): int,
-                # --- CAMBIO: Ahora es obligatorio ---
                 vol.Required(CONF_PV_IP): str, 
-                # --- FIN DEL CAMBIO ---
                 vol.Optional(CONF_PV_PORT, default=DEFAULT_MODBUS_PORT): int,
                 vol.Optional(CONF_PV_SLAVE, default=DEFAULT_MODBUS_SLAVE): int,
+                # --- Campos Speedwire (Opcionales) ---
+                vol.Optional(CONF_SHM_IP): str,
+                vol.Optional(CONF_SHM_GROUP, default=DEFAULT_SHM_GROUP): vol.In(["user", "installer"]),
+                vol.Optional(CONF_SHM_PASSWORD): str,
             }
         )
+        # --- FIN CAMBIO ---
 
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_DATA_SCHEMA
@@ -94,7 +105,8 @@ class OptionsFlowHandler(OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         current_config = {**self.config_entry.data, **self.config_entry.options}
-
+        
+        # --- CAMBIO: Añadidos campos opcionales de SHM ---
         options_schema = vol.Schema(
             {
                 vol.Required(
@@ -117,12 +129,10 @@ class OptionsFlowHandler(OptionsFlow):
                     CONF_BATTERY_SLAVE,
                     default=current_config.get(CONF_BATTERY_SLAVE, DEFAULT_MODBUS_SLAVE)
                 ): int,
-                # --- CAMBIO: Ahora es obligatorio ---
                 vol.Required(
                     CONF_PV_IP,
-                    default=current_config.get(CONF_PV_IP) # No necesita default ""
+                    default=current_config.get(CONF_PV_IP)
                 ): str,
-                # --- FIN DEL CAMBIO ---
                 vol.Optional(
                     CONF_PV_PORT,
                     default=current_config.get(CONF_PV_PORT, DEFAULT_MODBUS_PORT)
@@ -131,8 +141,22 @@ class OptionsFlowHandler(OptionsFlow):
                     CONF_PV_SLAVE,
                     default=current_config.get(CONF_PV_SLAVE, DEFAULT_MODBUS_SLAVE)
                 ): int,
+                # --- Campos Speedwire (Opcionales) ---
+                vol.Optional(
+                    CONF_SHM_IP,
+                    default=current_config.get(CONF_SHM_IP, "")
+                ): str,
+                vol.Optional(
+                    CONF_SHM_GROUP,
+                    default=current_config.get(CONF_SHM_GROUP, DEFAULT_SHM_GROUP)
+                ): vol.In(["user", "installer"]),
+                vol.Optional(
+                    CONF_SHM_PASSWORD,
+                    default=current_config.get(CONF_SHM_PASSWORD, "")
+                ): str,
             }
         )
+        # --- FIN CAMBIO ---
 
         return self.async_show_form(
             step_id="init", data_schema=options_schema
