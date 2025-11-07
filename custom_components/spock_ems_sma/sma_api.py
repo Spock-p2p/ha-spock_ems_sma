@@ -56,7 +56,7 @@ class SmaApiClient:
     async def _login(self):
         """Realiza el login y almacena el token de sesión."""
         url = self._base_url + LOGIN_URL
-        payload = {"username": self._username, "password": self._password}
+        payload = {"userName": self._username, "password": self._password}
         
         _LOGGER.debug(f"Intentando login en {self._host}")
         try:
