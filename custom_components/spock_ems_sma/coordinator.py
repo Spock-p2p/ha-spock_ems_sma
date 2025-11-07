@@ -7,7 +7,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-
+# ... (imports de pysma) ...
 from pysma import (
     SMAWebConnect,
     SmaAuthenticationException,
@@ -37,14 +37,17 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         """Inicializa el coordinador."""
         self.pysma_api = pysma_api
         self.hass = hass
-        self._http_session = http_session # Sesión para el PUSH
+        self._http_session = http_session
         self._spock_api_url = spock_api_url
         self._plant_id = plant_id
         self._headers = {"Authorization": f"Bearer {api_token}"}
         
-        self.sensors = None # Lista de sensores de pysma
+        self.sensors = None
         
-        # El 'data' del coordinador almacenará el diccionario de sensores
+        # --- NUEVO ATRIBUTO PARA EL SWITCH ---
+        # Por defecto, la operativa está HABILITADA
+        self.polling_enabled = True 
+        
         super().__init__(
             hass,
             _LOGGER,
@@ -52,6 +55,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             update_interval=SCAN_INTERVAL_SMA,
         )
 
+    # ... (la función async_initialize_sensors no cambia) ...
     async def async_initialize_sensors(self):
         """Obtiene la lista de sensores disponibles de pysma una vez."""
         try:
@@ -62,12 +66,20 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             _LOGGER.error(f"Error al inicializar sensores de pysma: {e}")
             raise UpdateFailed(f"No se pudo obtener la lista de sensores: {e}")
 
+
     async def _async_update_data(self) -> Dict[str, Any]:
         """
         Función principal de polling.
         Paso 1: PULL de datos de SMA (usando pysma).
         Paso 2: PUSH de datos a Spock.
         """
+        
+        # --- ¡COMPROBACIÓN DEL SWITCH MAESTRO! ---
+        if not self.polling_enabled:
+            _LOGGER.debug("Operativa global desactivada por el switch maestro. Saltando PULL/PUSH.")
+            # Devolvemos los datos anteriores para no 'romper' los sensores
+            return self.data 
+
         if not self.sensors:
             raise UpdateFailed("La lista de sensores de SMA no está inicializada.")
         
@@ -81,7 +93,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         except (SmaReadException, SmaConnectionException) as err:
             raise UpdateFailed(f"Error al leer SMA: {err}")
         except SmaAuthenticationException as err:
-            # La sesión expiró, pysma la re-iniciará automáticamente
             _LOGGER.warning(f"Autenticación de SMA fallida, se re-intentará: {err}")
             raise UpdateFailed(f"Autenticación de SMA fallida: {err}")
         
@@ -95,6 +106,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         # Devolvemos el diccionario de sensores para 'sensor.py'
         return sensors_dict
 
+    # ... (el resto de _map_sma_to_spock y _async_push_to_spock no cambian) ...
     def _map_sma_to_spock(self, sensors_dict: dict) -> dict:
         """
         Toma el diccionario de sensores de pysma y lo mapea
