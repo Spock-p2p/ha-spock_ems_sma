@@ -55,28 +55,24 @@ class SmaApiClient:
 
     async def _login(self):
         """Realiza el login y almacena el token de sesión."""
-
         url = self._base_url + LOGIN_URL
 
-        # Mapeo de 'username' al 'right' (rol) que exige la API
-        RIGHTS_MAP = {
-            "installer": "inst",
-            "user": "usr",
-        }
-        
-        # Asigna el 'right' correcto, o usa 'usr' por defecto
-        user_right = RIGHTS_MAP.get(self._username, "usr")
-
+        # Payload simple: solo usuario y contraseña
         payload = {
             "userName": self._username,
             "password": self._password,
-            "right": user_right
         }
         
-        _LOGGER.debug(f"Intentando login en {self._host} con payload: {{userName: '{self._username}', right: '{user_right}'}}")
+        # Headers explícitos: Algunos servidores requieren 'Accept'
+        headers = {
+            "Accept": "application/json",
+        }
         
+        _LOGGER.debug(f"Intentando login en {self._host} con payload: {{userName: '{self._username}'}}")
         try:
-            result = await self._request("POST", url, data=payload)
+            # Pasamos tanto el 'data' (que se serializa a JSON) como los 'headers'
+            result = await self._request("POST", url, data=payload, headers=headers)
+            
             self._session_token = result.get("token")
             if not self._session_token:
                 raise SmaApiError("Login fallido, no se recibió token")
@@ -91,7 +87,13 @@ class SmaApiClient:
             await self._login()
 
         url = self._base_url + RPC_URL
-        headers = {"Authorization": f"Bearer {self._session_token}"}
+        
+        # Añadimos el Accept header aquí también por si acaso
+        headers = {
+            "Authorization": f"Bearer {self._session_token}",
+            "Accept": "application/json",
+        }
+        
         payload = {
             "jsonrpc": "2.0",
             "id": "1",
