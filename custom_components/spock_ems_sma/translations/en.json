@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Spock EMS (SMA)",
+        "description": "Enter the credentials for your SMA Data Manager and the Spock API data.",
+        "data": {
+          "host": "Host (IP or DNS) of the SMA Data Manager",
+          "username": "Username (Group 'installer')",
+          "password": "Password",
+          "plant_id": "Plant ID (Spock)",
+          "spock_api_token": "Spock API Token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Incorrect SMA username or password.",
+      "cannot_connect": "Could not connect to the SMA Data Manager. Check the host and network.",
+      "unknown": "Unknown error. Check the logs for details."
+    },
+    "abort": {
+      "already_configured": "This SMA device is already configured."
+    }
+  }
+}
