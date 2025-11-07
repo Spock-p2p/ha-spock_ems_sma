@@ -1,6 +1,6 @@
 import logging
 import voluptuous as vol
-from voluptuous import Coerce  # <--- 1. IMPORTACIÓN AÑADIDA
+from voluptuous import Coerce  # <--- 1. ASEGÚRATE DE QUE ESTA LÍNEA ESTÉ
 from aiohttp.web import Response
 
 from homeassistant.components.http import HomeAssistantView
@@ -18,7 +18,7 @@ COMMAND_SCHEMA = vol.Schema(
     {
         vol.Required("plant_id"): cv.string,
         vol.Required("command"): cv.string,
-        vol.Optional("value"): Coerce(float), # <--- 2. CORREGIDO (quitado 'vol.' o 'cv.')
+        vol.Optional("value"): Coerce(float), # <--- 2. ASEGÚRATE DE QUE ESTA LÍNEA ESTÉ ASÍ
     }
 )
 
