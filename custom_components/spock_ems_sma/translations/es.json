@@ -3,19 +3,21 @@
     "step": {
       "user": {
         "title": "Spock EMS (SMA)",
-        "description": "Introduce las credenciales de tu SMA Data Manager y los datos de la API de Spock.",
+        "description": "Introduce las credenciales de SMA Webconnect y los datos de la API de Spock.",
         "data": {
-          "host": "Host (IP o DNS) del SMA Data Manager",
-          "username": "Nombre de usuario (Grupo 'installer')",
+          "host": "Host (IP o DNS) del dispositivo SMA",
+          "group": "Grupo de Usuario",
           "password": "Contraseña",
+          "ssl": "Usar SSL (HTTPS)",
+          "verify_ssl": "Verificar Certificado SSL",
           "plant_id": "ID de Planta (Spock)",
           "spock_api_token": "Token de la API de Spock"
         }
       }
     },
     "error": {
-      "invalid_auth": "Usuario o contraseña de SMA incorrectos.",
-      "cannot_connect": "No se pudo conectar al SMA Data Manager. Verifica el host y la red.",
+      "invalid_auth": "Usuario, contraseña o grupo de SMA inválido.",
+      "cannot_connect": "No se pudo conectar al dispositivo SMA. Verifica el host y la red.",
       "unknown": "Error desconocido. Revisa los logs para más detalles."
     },
     "abort": {
