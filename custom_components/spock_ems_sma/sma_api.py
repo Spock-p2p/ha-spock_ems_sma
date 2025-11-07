@@ -55,10 +55,26 @@ class SmaApiClient:
 
     async def _login(self):
         """Realiza el login y almacena el token de sesión."""
+
         url = self._base_url + LOGIN_URL
-        payload = {"userName": self._username, "password": self._password}
+
+        # Mapeo de 'username' al 'right' (rol) que exige la API
+        RIGHTS_MAP = {
+            "installer": "inst",
+            "user": "usr",
+        }
         
-        _LOGGER.debug(f"Intentando login en {self._host}")
+        # Asigna el 'right' correcto, o usa 'usr' por defecto
+        user_right = RIGHTS_MAP.get(self._username, "usr")
+
+        payload = {
+            "userName": self._username,
+            "password": self._password,
+            "right": user_right
+        }
+        
+        _LOGGER.debug(f"Intentando login en {self._host} con payload: {{userName: '{self._username}', right: '{user_right}'}}")
+        
         try:
             result = await self._request("POST", url, data=payload)
             self._session_token = result.get("token")
