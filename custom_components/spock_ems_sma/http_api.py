@@ -6,6 +6,8 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
+from pysma import SMAWebConnect # Importado para Fase 2
+
 from .const import DOMAIN, SPOCK_COMMAND_API_PATH
 
 _LOGGER = logging.getLogger(__name__)
@@ -15,26 +17,32 @@ COMMAND_SCHEMA = vol.Schema(
     {
         vol.Required("plant_id"): cv.string,
         vol.Required("command"): cv.string,
-        vol.Optional("value"): vol.Coerce(float),
+        vol.Optional("value"): cv.Coerce(float),
     }
 )
 
 class SpockApiView(HomeAssistantView):
     """
     Vista de API (INBOUND) para recibir comandos de Spock Cloud.
-    Valida el token de autorización y el 'plant_id'.
     """
     
-    url = SPOCK_COMMAND_API_PATH  # "/api/spock_ems_sma"
-    name = "api:spock_ems_sma"
+    url = SPOCK_COMMAND_API_PATH
+    name = f"api:{DOMAIN}"
     requires_auth = False  # Usamos validación de token propia
 
-    def __init__(self, hass: HomeAssistant, entry_id: str, api_token: str, plant_id: str):
+    def __init__(
+        self, 
+        hass: HomeAssistant, 
+        entry_id: str, 
+        api_token: str, 
+        plant_id: str,
+        pysma_api: SMAWebConnect
+    ):
         self.hass = hass
         self.entry_id = entry_id
         self.valid_token = f"Bearer {api_token}"
         self.valid_plant_id = plant_id
-        # (Fase 2) Aquí se instanciará el cliente Pysma para escritura
+        self.pysma_api = pysma_api # Guardamos para Fase 2
 
     async def post(self, request):
         """Maneja las peticiones POST de comandos."""
@@ -68,7 +76,11 @@ class SpockApiView(HomeAssistantView):
         )
 
         try:
-            # --- Aquí irá la lógica de FASE 2 (pysma) ---
+            # --- Aquí irá la lógica de FASE 2 ---
+            # Ejemplo de cómo se haría:
+            # if command == "set_algo":
+            #     await self.pysma_api.set_parameter(sensor_de_pysma, value)
+            
             _LOGGER.info(f"Fase 1: Comando '{command}' recibido (pysma pendiente).")
             
             return Response(text="Command received (Phase 1)", status=200)
