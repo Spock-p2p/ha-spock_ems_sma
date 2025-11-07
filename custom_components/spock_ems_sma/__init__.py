@@ -8,7 +8,7 @@ from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
     CONF_SSL,
-    CONF_VERIFY_SSL,
+    # CONF_VERIFY_SSL no se usa, está hardcoded
     EVENT_HOMEASSISTANT_STOP,
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -39,14 +39,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     url = f"{protocol}://{config[CONF_HOST]}"
     
     connector_args = {}
-    if config[CONF_SSL] and not config[CONF_VERIFY_SSL]:
+    if config[CONF_SSL]:
+        # --- LÓGICA HARDCODED ---
+        # Siempre usamos un contexto SSL que NO verifica el certificado
+        _LOGGER.debug("Creando conector PYSMA con SSL sin verificación (Hardcoded)")
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
         connector_args["ssl"] = ssl_context
-    elif config[CONF_SSL]:
-         connector_args["ssl"] = True
-
+    
     connector = TCPConnector(**connector_args)
     # Sesión específica para pysma
     pysma_session = async_get_clientsession(hass, connector=connector)
@@ -79,7 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     
     hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
 
-    # 3. Registrar las plataformas (sensor.py)
+    # 3. Registrar las plataformas (sensor.py, switch.py)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # 4. Registrar la vista HTTP para RECIBIR comandos
@@ -88,7 +89,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         entry_id=entry.entry_id,
         api_token=config[CONF_SPOCK_API_TOKEN],
         plant_id=config[CONF_PLANT_ID],
-        pysma_api=pysma_api # Pasamos la api para Fase 2
+        pysma_api=pysma_api 
     )
     hass.http.register_view(view)
     
