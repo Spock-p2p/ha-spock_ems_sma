@@ -1,364 +1,93 @@
-"""Integración Spock EMS SMA (PV por Modbus; batería/PCC por Speedwire SHM2)"""
-from __future__ import annotations
-
 import logging
-from datetime import timedelta
-from typing import Any
-
-from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.core import HomeAssistant
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_USERNAME,
+    CONF_PASSWORD,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
-# --- Modbus (solo para PV) ---
-from pymodbus.client import ModbusTcpClient
-from .compat_pymodbus import Endian
-try:
-    from pymodbus.payload import BinaryPayloadDecoder
-except Exception:
-    from .compat_payload import BinaryPayloadDecoder  # shim local si tu build lo necesita
-
-# --- Speedwire / pysma (para batería y PCC) ---
-try:
-    # Estilo típico en pysma usado por integraciones HA
-    from pysma import SMA  # type: ignore
-except Exception:
-    # Fallback por si tu build expone SMA colgado del módulo
-    import pysma  # type: ignore
-    SMA = getattr(pysma, "SMA", None)  # type: ignore
 
 from .const import (
     DOMAIN,
-    API_ENDPOINT,
-    CONF_API_TOKEN,
+    CONF_SPOCK_API_TOKEN,
     CONF_PLANT_ID,
-    # Tripower (PV por Modbus)
-    CONF_PV_IP,
-    CONF_PV_PORT,
-    CONF_PV_SLAVE,
-    # SHM2 (Speedwire)
-    CONF_SHM_IP,
-    CONF_SHM_GROUP,
-    CONF_SHM_PASSWORD,
-    # Compat con switch.py
-    CONF_BATTERY_IP, CONF_BATTERY_PORT, CONF_BATTERY_SLAVE,
-    # Varios
-    DEFAULT_SCAN_INTERVAL_S,
     PLATFORMS,
-    # Registros PV (Tripower)
-    SMA_REG_PV_POWER,  # 30775 S32 FIX0
-    # Keys
-    KEY_BAT_SOC,
-    KEY_BAT_POWER,
-    KEY_PV_POWER,
-    KEY_GRID_POWER,
-    KEY_BAT_CAPACITY,
-    KEY_BAT_CHARGE_ALLOWED,
-    KEY_BAT_DISCHARGE_ALLOWED,
-    KEY_TOTAL_GRID_OUTPUT,
+    SPOCK_TELEMETRY_API_ENDPOINT,
 )
+from .sma_api import SmaApiClient
+from .coordinator import SmaTelemetryCoordinator
+from .http_api import SpockApiView
 
 _LOGGER = logging.getLogger(__name__)
 
-# -------------------------
-# Helpers Modbus (PV solo)
-# -------------------------
-def _mb_read(method, address: int, count: int, unit_id: int, **kwargs):
-    """
-    Llama a read_* probando unit=, luego slave=, y finalmente sin id de unidad.
-    Evita posicionales porque algunas builds lo prohíben.
-    """
-    try:
-        return method(address, count=count, unit=unit_id, **kwargs)
-    except TypeError:
-        try:
-            return method(address, count=count, slave=unit_id, **kwargs)
-        except TypeError:
-            return method(address, count=count, **kwargs)
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Configura la integración desde la Config Entry."""
+    
+    config = entry.data
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
 
+    # Datos de configuración
+    sma_host = config[CONF_HOST]
+    sma_user = config[CONF_USERNAME]
+    sma_pass = config[CONF_PASSWORD]
+    api_token = config[CONF_SPOCK_API_TOKEN]
+    plant_id = config[CONF_PLANT_ID]
+    
+    session = async_get_clientsession(hass)
 
-def _try_read_register_block(client, reg: int, count: int, unit_id: int):
-    """
-    Intenta leer reg con varias combinaciones:
-      * Unit IDs: [unit_id, 3, 126, 2, 1, 10]
-      * Input base 30001 y 30000; Holding base 40001 y 40000
-    Devuelve (kind, addr, unit_used, resp) en la primera lectura válida (no 0xFFFF...).
-    """
-    unit_candidates: list[int] = []
-    for u in (unit_id, 3, 126, 2, 1, 10):
-        if u is not None and u not in unit_candidates:
-            unit_candidates.append(u)
+    # 1. Configurar el Cliente API de SMA (para Telemetría PULL)
+    api_client_sma = SmaApiClient(
+        host=sma_host,
+        username=sma_user,
+        password=sma_pass,
+        session=session,
+    )
 
-    attempts = [
-        ("input",  reg - 30001),
-        ("input",  reg - 30000),
-        ("holding", reg - 40001),
-        ("holding", reg - 40000),
-    ]
+    # 2. Configurar el Coordinador (PULL de SMA y PUSH a Spock)
+    coordinator = SmaTelemetryCoordinator(
+        hass=hass,
+        api_client=api_client_sma,
+        session=session,
+        api_token=api_token,
+        plant_id=plant_id,
+        spock_api_url=SPOCK_TELEMETRY_API_ENDPOINT
+    )
+    
+    # Realiza la primera carga de datos (PULL) y envío (PUSH)
+    await coordinator.async_config_entry_first_refresh()
+    
+    hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
 
-    last_exc: Exception | None = None
-    for u in unit_candidates:
-        for kind, addr in attempts:
-            try:
-                if addr < 0:
-                    continue
-                if kind == "input":
-                    resp = _mb_read(client.read_input_registers, address=addr, count=count, unit_id=u)
-                else:
-                    resp = _mb_read(client.read_holding_registers, address=addr, count=count, unit_id=u)
-                if hasattr(resp, "isError") and resp.isError():
-                    continue
-                regs = getattr(resp, "registers", None)
-                if regs and not all((r & 0xFFFF) == 0xFFFF for r in regs):
-                    _LOGGER.debug("PV Modbus OK %s@%s unit=%s reg=%s -> %s", kind, addr, u, reg, regs)
-                    return kind, addr, u, resp
-            except Exception as e:
-                last_exc = e
-                continue
-    raise ConnectionError(f"No PV regs at {reg} (last: {last_exc})")
-
-
-# -------------------------
-# Normalizadores (NaN SMA)
-# -------------------------
-INVALID_32U = {0xFFFFFFFF, 0x80000000}
-INVALID_32S = {-1, -2147483648}
-
-
-def _norm_u32(v: int) -> int | None:
-    return None if v in INVALID_32U else v
-
-
-def _norm_s32(v: int) -> int | None:
-    return None if v in INVALID_32S else v
-
-
-# -------------------------
-# pysma keys (SHM2)
-# -------------------------
-# Lista de claves habituales en SHM2/Speedwire; se prueba en orden y
-# se normaliza a ints.
-PYSMA_KEYS = [
-    ("Bat.SOC", "soc"),          # % SOC
-    ("bat_soc", "soc"),
-    ("Bat.Pwr", "bat_pwr"),      # W (positivo = descarga)
-    ("bat_power", "bat_pwr"),
-    ("GridMs.TotW", "grid_pwr"), # W (positivo = exportación a red)
-    ("grid_power", "grid_pwr"),
-]
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Configura la integración desde la entrada de configuración."""
-    coordinator = SpockEnergyCoordinator(hass, entry)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"coordinator": coordinator, "is_enabled": True}
+    # 3. Registrar las plataformas (sensor.py)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-    _LOGGER.info("Spock EMS SMA: perfil mixto (PV Modbus Tripower + batería/PCC via SHM2 Speedwire).")
+
+    # 4. Registrar la vista HTTP para RECIBIR comandos (INBOUND)
+    view = SpockApiView(
+        hass=hass,
+        entry_id=entry.entry_id,
+        api_token=api_token,
+        plant_id=plant_id
+    )
+    hass.http.register_view(view)
+    
+    hass.data[DOMAIN][entry.entry_id]["api_view"] = view
+    
     return True
 
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Descarga la integración."""
+    
+    # 1. Des-registra la vista HTTP
+    view = hass.data[DOMAIN][entry.entry_id].get("api_view")
+    if view:
+        hass.http.unregister_view(view.url)
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Descarga la entrada de configuración."""
+    # 2. Descarga las plataformas (sensores)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    
+    # 3. Limpia los datos
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+        hass.data[DOMAIN].pop(entry.entry_id)
+
     return unload_ok
-
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Recarga la entrada de configuración al modificar opciones."""
-    await hass.config_entries.async_reload(entry.entry_id)
-
-
-class SpockEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator que gestiona el ciclo de API unificado."""
-
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self.hass = hass
-        self.config_entry = entry
-        self.config = {**entry.data, **entry.options}
-        self.api_token: str = self.config[CONF_API_TOKEN]
-        self.plant_id: int = self.config[CONF_PLANT_ID]
-
-        # Tripower (PV por Modbus)
-        self.pv_ip: str = self.config[CONF_PV_IP]
-        self.pv_port: int = self.config[CONF_PV_PORT]
-        self.pv_slave: int = self.config[CONF_PV_SLAVE]
-
-        # SHM2 (Speedwire pysma)
-        self.shm_ip: str | None = self.config.get(CONF_SHM_IP)
-        self.shm_group: str | None = self.config.get(CONF_SHM_GROUP)
-        self.shm_password: str | None = self.config.get(CONF_SHM_PASSWORD)
-
-        # --- Compat con switch.py: mantener attrs de batería aunque no se usen ---
-        self.battery_ip = self.config.get(CONF_BATTERY_IP)        # puede ser None
-        self.battery_port = self.config.get(CONF_BATTERY_PORT)    # puede ser None
-        self.battery_slave = self.config.get(CONF_BATTERY_SLAVE)  # puede ser None
-
-        self._session = async_get_clientsession(hass)
-
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL_S),
-        )
-
-    # ---- Lecturas principales ----
-    def _read_pv_modbus(self) -> int:
-        """Lee potencia FV (W) del Tripower por Modbus (30775 S32)."""
-        client = ModbusTcpClient(host=self.pv_ip, port=self.pv_port, timeout=5)
-        try:
-            client.connect()
-            _, _, unit_used, resp = _try_read_register_block(client, SMA_REG_PV_POWER, 2, self.pv_slave or 2)
-            dec = BinaryPayloadDecoder.fromRegisters(resp.registers, byteorder=Endian.Big, wordorder=Endian.Little)
-            raw = dec.decode_32bit_int()
-            val = _norm_s32(raw) or 0
-            _LOGGER.debug("PV power read (unit=%s): raw=%s -> %s W", unit_used, raw, val)
-            return int(val)
-        except Exception as e:
-            _LOGGER.debug("PV Modbus read failed: %s", e)
-            return 0
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
-
-    async def _read_shm2_speedwire(self) -> dict[str, int]:
-        """Lee SOC/bat_power/grid del SHM2 vía pysma. Devuelve ints (fallback 0)."""
-        out = {"soc": 0, "bat_pwr": 0, "grid_pwr": 0}
-        if not self.shm_ip:
-            _LOGGER.debug("Sin shm_ip configurada: batería/PCC quedarán a 0.")
-            return out
-
-        if "SMA" not in globals() or SMA is None:
-            _LOGGER.debug("pysma: no se encontró clase SMA en la librería instalada.")
-            return out
-
-        # pysma espera URL con esquema (http/https)
-        base = self.shm_ip.strip()
-        if not base.startswith(("http://", "https://")):
-            base = f"http://{base}"
-
-        sma = SMA(self._session, base, self.shm_password or "", self.shm_group)
-
-        try:
-            if not await sma.new_session():
-                _LOGGER.debug("pysma: no se pudo iniciar sesión en SHM2 %s", base)
-                return out
-
-            values: dict[str, Any] = {}
-
-            # Preferir get_values si está disponible; si no, fallback a read(key)
-            wanted = {k: None for k, _ in PYSMA_KEYS}
-
-            try:
-                get_values = getattr(sma, "get_values", None)
-                if callable(get_values):
-                    res = await get_values(wanted)
-                    if isinstance(res, dict):
-                        values.update(res)
-                else:
-                    read = getattr(sma, "read", None)
-                    if callable(read):
-                        for k in wanted.keys():
-                            try:
-                                v = await read(k)
-                                if v is not None:
-                                    values[k] = v
-                            except Exception:
-                                continue
-            except Exception as e:
-                _LOGGER.debug("pysma get_values/read error: %s", e)
-
-            # Cerrar sesión
-            try:
-                await sma.close_session()
-            except Exception:
-                pass
-
-            # Mapear a nuestras claves y normalizar
-            def _to_int(x):
-                try:
-                    return int(float(x))
-                except Exception:
-                    return 0
-
-            soc = values.get("Bat.SOC", values.get("bat_soc"))
-            bat_pwr = values.get("Bat.Pwr", values.get("bat_power"))
-            grid_pwr = values.get("GridMs.TotW", values.get("grid_power"))
-
-            if soc is not None:
-                out["soc"] = _to_int(soc)
-            if bat_pwr is not None:
-                out["bat_pwr"] = _to_int(bat_pwr)
-            if grid_pwr is not None:
-                out["grid_pwr"] = _to_int(grid_pwr)
-
-            _LOGGER.debug(
-                "SHM2 Speedwire -> SOC=%s%%, BatPower=%sW, Grid=%sW",
-                out["soc"], out["bat_pwr"], out["grid_pwr"]
-            )
-            return out
-
-        except Exception as e:
-            _LOGGER.debug("pysma error: %s", e)
-            try:
-                await sma.close_session()
-            except Exception:
-                pass
-            return out
-
-    # ---- Bucle de actualización ----
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Ciclo de actualización: PV (Modbus) + batería/PCC (Speedwire)."""
-        # lee en paralelo: PV (executor) + SHM2 (async)
-        pv_power = await self.hass.async_add_executor_job(self._read_pv_modbus)
-        shm_vals = await self._read_shm2_speedwire()
-
-        # Construye payload numérico
-        telemetry = {
-            KEY_PV_POWER: pv_power,
-            KEY_BAT_SOC: shm_vals.get("soc", 0),
-            KEY_BAT_POWER: shm_vals.get("bat_pwr", 0),
-            KEY_GRID_POWER: shm_vals.get("grid_pwr", 0),
-            KEY_BAT_CAPACITY: 0,                # no lo da SHM2 por defecto
-            KEY_BAT_CHARGE_ALLOWED: True,       # placeholders
-            KEY_BAT_DISCHARGE_ALLOWED: True,
-            KEY_TOTAL_GRID_OUTPUT: 0,
-        }
-
-        # Envío a API Spock
-        payload_api = {
-            "plant_id": str(self.config[CONF_PLANT_ID]),
-            "bat_soc": str(telemetry[KEY_BAT_SOC]),
-            "bat_power": str(telemetry[KEY_BAT_POWER]),
-            "pv_power": str(telemetry[KEY_PV_POWER]),
-            "ongrid_power": str(telemetry[KEY_GRID_POWER]),
-            "bat_charge_allowed": str(telemetry[KEY_BAT_CHARGE_ALLOWED]).lower(),
-            "bat_discharge_allowed": str(telemetry[KEY_BAT_DISCHARGE_ALLOWED]).lower(),
-            "bat_capacity": str(telemetry[KEY_BAT_CAPACITY]),
-            "total_grid_output_energy": str(telemetry[KEY_TOTAL_GRID_OUTPUT]),
-        }
-
-        try:
-            async with self._session.post(
-                API_ENDPOINT,
-                headers={"X-Auth-Token": self.config[CONF_API_TOKEN]},
-                json=payload_api,
-            ) as resp:
-                if resp.status == 403:
-                    raise UpdateFailed("API Token inválido (403)")
-                if resp.status != 200:
-                    txt = await resp.text()
-                    _LOGGER.error("API error %s: %s", resp.status, txt)
-                    raise UpdateFailed(f"Error de API (HTTP {resp.status})")
-                return telemetry
-
-        except UpdateFailed:
-            raise
-        except Exception as err:
-            _LOGGER.error("Error en el ciclo de actualización (API POST): %s", err)
-            raise UpdateFailed(f"Error en el ciclo de actualización (API POST): {err}") from err
