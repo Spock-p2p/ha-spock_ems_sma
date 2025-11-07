@@ -27,7 +27,20 @@ class SmaApiClient:
         data: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Hace una petición HTTP genérica, manejando errores."""
+        """
+        Hace una petición HTTP genérica, manejando errores.
+        AÑADE HEADERS JSON POR DEFECTO.
+        """
+        
+        # Headers base para CUALQUIER petición a la API de ennexOS
+        base_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        
+        # Si se pasan headers adicionales (como el Token), los fusiona
+        if headers:
+            base_headers.update(headers)
         
         # ennexOS usa certificados autofirmados, ignoramos la validación SSL
         async with async_timeout.timeout(10):
@@ -36,19 +49,20 @@ class SmaApiClient:
                     method,
                     url,
                     json=data,
-                    headers=headers,
+                    headers=base_headers, # Usa los headers fusionados
                     ssl=False  # ¡Importante!
                 )
                 
-                if resp.status == 401:  # Token expirado
+                if resp.status == 401:  # Token expirado o auth inválida
                     self._session_token = None
                     raise SmaApiError("Token expirado o inválido")
                 
-                resp.raise_for_status() # Lanza excepción si hay error HTTP
+                resp.raise_for_status() # Lanza excepción si hay error HTTP (ej: 400)
                 
                 return await resp.json()
 
             except ClientError as err:
+                # El error 400 Bad Request entrará aquí
                 raise SmaApiError(f"Error de red: {err}")
             except Exception as e:
                 raise SmaApiError(f"Error inesperado en request: {e}")
@@ -57,21 +71,27 @@ class SmaApiClient:
         """Realiza el login y almacena el token de sesión."""
         url = self._base_url + LOGIN_URL
 
-        # Payload simple: solo usuario y contraseña
+        # Mapeo de 'username' al 'right' (rol) que exige la API
+        RIGHTS_MAP = {
+            "installer": "inst",
+            "user": "usr",
+        }
+        
+        # Asigna el 'right' correcto, o usa 'usr' por defecto
+        user_right = RIGHTS_MAP.get(self._username, "usr")
+
+        # Payload COMPLETO (como en el repo shadow578)
         payload = {
             "userName": self._username,
             "password": self._password,
+            "right": user_right
         }
         
-        # Headers explícitos: Algunos servidores requieren 'Accept'
-        headers = {
-            "Accept": "application/json",
-        }
+        _LOGGER.debug(f"Intentando login en {self._host} con payload: {{userName: '{self._username}', right: '{user_right}'}}")
         
-        _LOGGER.debug(f"Intentando login en {self._host} con payload: {{userName: '{self._username}'}}")
         try:
-            # Pasamos tanto el 'data' (que se serializa a JSON) como los 'headers'
-            result = await self._request("POST", url, data=payload, headers=headers)
+            # No pasamos headers aquí, _request() ya pone los correctos
+            result = await self._request("POST", url, data=payload)
             
             self._session_token = result.get("token")
             if not self._session_token:
@@ -88,10 +108,10 @@ class SmaApiClient:
 
         url = self._base_url + RPC_URL
         
-        # Añadimos el Accept header aquí también por si acaso
+        # Headers específicos para RPC (el token)
+        # _request() los fusionará con Content-Type y Accept
         headers = {
             "Authorization": f"Bearer {self._session_token}",
-            "Accept": "application/json",
         }
         
         payload = {
@@ -124,11 +144,8 @@ class SmaApiClient:
         Obtiene todos los valores de telemetría (instantáneos).
         Esta es la función que llamará el Coordinator.
         """
-        # Pedimos todos los canales ("channels": [])
         result = await self._rpc_request("getValues", {"channels": []})
         
-        # El resultado es un diccionario de canales, lo aplanamos
-        # ej: {"channel_id": {"value": 123}} -> {"channel_id": 123}
         flat_data = {}
         if isinstance(result, dict):
             for channel_id, data in result.items():
