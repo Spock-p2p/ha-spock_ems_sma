@@ -1,70 +1,25 @@
 {
-    "config": {
-        "step": {
-            "user": {
-                "title": "Configuración de Spock EMS (SMA)",
-                "description": "Introduce los detalles de tu API de Spock y las IPs de tus inversores SMA. Los campos del Home Manager son opcionales (solo para escritura).",
-                "data": {
-                    "api_token": "Spock EMS API Token",
-                    "plant_id": "Spock EMS ID de Planta",
-                    "battery_ip": "IP Inversor de Batería (Ej. Sunny Boy Storage)",
-                    "battery_port": "Puerto Modbus Batería",
-                    "battery_slave": "ID Esclavo Batería",
-                    "pv_ip": "IP Inversor FV (Ej. Sunny Boy)",
-                    "pv_port": "Puerto Modbus FV",
-                    "pv_slave": "ID Esclavo FV",
-                    "shm_ip": "IP Sunny Home Manager (Opcional, para escritura)",
-                    "shm_group": "Grupo de Usuario SHM (ej: user)",
-                    "shm_password": "Contraseña de Usuario SHM"
-                }
-            }
-        },
-        "abort": {
-            "already_configured": "Esta combinación de IP de Batería e ID de Planta ya está configurada."
+  "config": {
+    "step": {
+      "user": {
+        "title": "Spock EMS (SMA)",
+        "description": "Introduce las credenciales de tu SMA Data Manager y los datos de la API de Spock.",
+        "data": {
+          "host": "Host (IP o DNS) del SMA Data Manager",
+          "username": "Nombre de usuario (Grupo 'installer')",
+          "password": "Contraseña",
+          "plant_id": "ID de Planta (Spock)",
+          "spock_api_token": "Token de la API de Spock"
         }
+      }
     },
-    "options": {
-        "step": {
-            "init": {
-                "title": "Opciones de Spock EMS (SMA)",
-                "data": {
-                    "api_token": "Spock EMS API Token",
-                    "plant_id": "Spock EMS ID de Planta",
-                    "battery_ip": "IP Inversor de Batería",
-                    "battery_port": "Puerto Modbus Batería",
-                    "battery_slave": "ID Esclavo Batería",
-                    "pv_ip": "IP Inversor FV",
-                    "pv_port": "Puerto Modbus FV",
-                    "pv_slave": "ID Esclavo FV",
-                    "shm_ip": "IP Sunny Home Manager (Opcional, para escritura)",
-                    "shm_group": "Grupo de Usuario SHM (ej: user)",
-                    "shm_password": "Contraseña de Usuario SHM"
-                }
-            }
-        }
+    "error": {
+      "invalid_auth": "Usuario o contraseña de SMA incorrectos.",
+      "cannot_connect": "No se pudo conectar al SMA Data Manager. Verifica el host y la red.",
+      "unknown": "Error desconocido. Revisa los logs para más detalles."
     },
-    "entity": {
-        "switch": {
-            "polling_enabled": {
-                "name": "Habilitar Sondeo Modbus/API"
-            }
-        },
-        "sensor": {
-            "bat_soc": {
-                "name": "SOC Batería"
-            },
-            "bat_power": {
-                "name": "Potencia Batería"
-            },
-            "pv_power": {
-                "name": "Potencia FV"
-            },
-            "ongrid_power": {
-                "name": "Potencia Red"
-            },
-            "bat_capacity": {
-                "name": "Capacidad Batería"
-            }
-        }
+    "abort": {
+      "already_configured": "Este dispositivo SMA ya está configurado."
     }
+  }
 }
