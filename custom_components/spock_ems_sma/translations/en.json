@@ -3,15 +3,14 @@
     "step": {
       "user": {
         "title": "Spock EMS (SMA)",
-        "description": "Enter your SMA Webconnect credentials and Spock API data.",
+        "description": "Enter your Spock API data and SMA Webconnect credentials.",
         "data": {
+          "plant_id": "Plant ID (Spock)",
+          "spock_api_token": "Spock API Token",
           "host": "Host (IP or DNS) of SMA Device",
           "group": "User Group",
           "password": "Password",
-          "ssl": "Use SSL (HTTPS)",
-          "verify_ssl": "Verify SSL Certificate",
-          "plant_id": "Plant ID (Spock)",
-          "spock_api_token": "Spock API Token"
+          "ssl": "Use SSL (HTTPS)"
         }
       }
     },
