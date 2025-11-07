@@ -1,21 +1,28 @@
 import logging
+import ssl
+from aiohttp import TCPConnector
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, Event
 from homeassistant.const import (
     CONF_HOST,
-    CONF_USERNAME,
     CONF_PASSWORD,
+    CONF_SSL,
+    CONF_VERIFY_SSL,
+    EVENT_HOMEASSISTANT_STOP,
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from pysma import SMAWebConnect
+
 from .const import (
     DOMAIN,
+    CONF_GROUP,
     CONF_SPOCK_API_TOKEN,
     CONF_PLANT_ID,
     PLATFORMS,
     SPOCK_TELEMETRY_API_ENDPOINT,
 )
-from .sma_api import SmaApiClient
 from .coordinator import SmaTelemetryCoordinator
 from .http_api import SpockApiView
 
@@ -27,34 +34,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     config = entry.data
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
 
-    # Datos de configuración
-    sma_host = config[CONF_HOST]
-    sma_user = config[CONF_USERNAME]
-    sma_pass = config[CONF_PASSWORD]
-    api_token = config[CONF_SPOCK_API_TOKEN]
-    plant_id = config[CONF_PLANT_ID]
+    # --- Configuración del cliente PYSMA ---
+    protocol = "https" if config[CONF_SSL] else "http"
+    url = f"{protocol}://{config[CONF_HOST]}"
     
-    session = async_get_clientsession(hass)
+    connector_args = {}
+    if config[CONF_SSL] and not config[CONF_VERIFY_SSL]:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        connector_args["ssl"] = ssl_context
+    elif config[CONF_SSL]:
+         connector_args["ssl"] = True
 
-    # 1. Configurar el Cliente API de SMA (para Telemetría PULL)
-    api_client_sma = SmaApiClient(
-        host=sma_host,
-        username=sma_user,
-        password=sma_pass,
-        session=session,
+    connector = TCPConnector(**connector_args)
+    # Sesión específica para pysma
+    pysma_session = async_get_clientsession(hass, connector=connector)
+
+    pysma_api = SMAWebConnect(
+        session=pysma_session,
+        url=url,
+        password=config[CONF_PASSWORD],
+        group=config[CONF_GROUP],
     )
+    
+    # Sesión genérica de HA (para el PUSH a Spock)
+    http_session = async_get_clientsession(hass)
 
     # 2. Configurar el Coordinador (PULL de SMA y PUSH a Spock)
     coordinator = SmaTelemetryCoordinator(
         hass=hass,
-        api_client=api_client_sma,
-        session=session,
-        api_token=api_token,
-        plant_id=plant_id,
+        pysma_api=pysma_api,
+        http_session=http_session,
+        api_token=config[CONF_SPOCK_API_TOKEN],
+        plant_id=config[CONF_PLANT_ID],
         spock_api_url=SPOCK_TELEMETRY_API_ENDPOINT
     )
     
-    # Realiza la primera carga de datos (PULL) y envío (PUSH)
+    # Inicializa la lista de sensores en pysma
+    await coordinator.async_initialize_sensors()
+    
+    # Realiza la primera carga de datos
     await coordinator.async_config_entry_first_refresh()
     
     hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
@@ -62,31 +82,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # 3. Registrar las plataformas (sensor.py)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # 4. Registrar la vista HTTP para RECIBIR comandos (INBOUND)
+    # 4. Registrar la vista HTTP para RECIBIR comandos
     view = SpockApiView(
         hass=hass,
         entry_id=entry.entry_id,
-        api_token=api_token,
-        plant_id=plant_id
+        api_token=config[CONF_SPOCK_API_TOKEN],
+        plant_id=config[CONF_PLANT_ID],
+        pysma_api=pysma_api # Pasamos la api para Fase 2
     )
     hass.http.register_view(view)
     
     hass.data[DOMAIN][entry.entry_id]["api_view"] = view
+    
+    # 5. Asegurar cierre de sesión de pysma
+    async def _async_handle_shutdown(event: Event) -> None:
+        await pysma_api.close_session()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_handle_shutdown)
+    )
     
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Descarga la integración."""
     
-    # 1. Des-registra la vista HTTP
     view = hass.data[DOMAIN][entry.entry_id].get("api_view")
     if view:
         hass.http.unregister_view(view.url)
 
-    # 2. Descarga las plataformas (sensores)
+    # Cerramos la sesión de pysma
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    await coordinator.pysma_api.close_session()
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
-    # 3. Limpia los datos
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
 
