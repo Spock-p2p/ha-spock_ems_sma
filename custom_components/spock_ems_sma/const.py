@@ -19,5 +19,9 @@ CONF_GROUP = "group"
 GROUPS = ["user", "installer"]
 DEFAULT_GROUP = "installer"
 
-# Plataformas a cargar
-PLATFORMS = ["sensor"]
+# --- NUEVAS CONSTANTES DEL SWITCH ---
+MASTER_SWITCH_NAME = "Spock EMS SMA Control"
+MASTER_SWITCH_KEY = "master_control"
+
+# Plataformas a cargar (Añadido "switch")
+PLATFORMS = ["sensor", "switch"]
