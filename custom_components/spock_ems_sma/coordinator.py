@@ -1,15 +1,21 @@
 import logging
 import async_timeout
 from aiohttp import ClientSession, ClientError
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
 
+from pysma import (
+    SMAWebConnect,
+    SmaAuthenticationException,
+    SmaConnectionException,
+    SmaReadException,
+)
+
 from .const import DOMAIN, SCAN_INTERVAL_SMA
-from .sma_api import SmaApiClient, SmaApiError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,20 +28,23 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
     def __init__(
         self, 
         hass, 
-        api_client: SmaApiClient, 
-        session: ClientSession,
+        pysma_api: SMAWebConnect, 
+        http_session: ClientSession,
         api_token: str,
         plant_id: str,
         spock_api_url: str
     ):
         """Inicializa el coordinador."""
-        self.api_client = api_client
+        self.pysma_api = pysma_api
         self.hass = hass
-        self._session = session
+        self._http_session = http_session # Sesión para el PUSH
         self._spock_api_url = spock_api_url
         self._plant_id = plant_id
         self._headers = {"Authorization": f"Bearer {api_token}"}
         
+        self.sensors = None # Lista de sensores de pysma
+        
+        # El 'data' del coordinador almacenará el diccionario de sensores
         super().__init__(
             hass,
             _LOGGER,
@@ -43,104 +52,95 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             update_interval=SCAN_INTERVAL_SMA,
         )
 
-    async def _async_update_data(self):
+    async def async_initialize_sensors(self):
+        """Obtiene la lista de sensores disponibles de pysma una vez."""
+        try:
+            _LOGGER.info("Obteniendo lista de sensores de SMA...")
+            self.sensors = await self.pysma_api.get_sensors()
+            _LOGGER.info(f"Encontrados {len(self.sensors)} sensores en SMA.")
+        except Exception as e:
+            _LOGGER.error(f"Error al inicializar sensores de pysma: {e}")
+            raise UpdateFailed(f"No se pudo obtener la lista de sensores: {e}")
+
+    async def _async_update_data(self) -> Dict[str, Any]:
         """
         Función principal de polling.
-        Paso 1: PULL de datos de SMA.
+        Paso 1: PULL de datos de SMA (usando pysma).
         Paso 2: PUSH de datos a Spock.
         """
+        if not self.sensors:
+            raise UpdateFailed("La lista de sensores de SMA no está inicializada.")
         
         # --- PASO 1: PULL (Obtener datos de SMA) ---
+        sensors_dict = {}
         try:
-            sma_data_raw = await self.api_client.get_instantaneous_values()
-            if not sma_data_raw:
-                raise UpdateFailed("No data received from SMA API")
-            
-            _LOGGER.debug(f"Datos PULL de SMA recibidos: {sma_data_raw}")
+            await self.pysma_api.read(self.sensors)
+            sensors_dict = {s.name: s.value for s in self.sensors}
+            _LOGGER.debug(f"Datos PULL de SMA recibidos: {sensors_dict}")
 
-        except SmaApiError as err:
-            raise UpdateFailed(f"Error communicating with SMA API: {err}")
+        except (SmaReadException, SmaConnectionException) as err:
+            raise UpdateFailed(f"Error al leer SMA: {err}")
+        except SmaAuthenticationException as err:
+            # La sesión expiró, pysma la re-iniciará automáticamente
+            _LOGGER.warning(f"Autenticación de SMA fallida, se re-intentará: {err}")
+            raise UpdateFailed(f"Autenticación de SMA fallida: {err}")
         
         # --- PASO 2: PUSH (Enviar datos a Spock Cloud) ---
         try:
-            await self._async_push_to_spock(sma_data_raw)
+            spock_payload = self._map_sma_to_spock(sensors_dict)
+            await self._async_push_to_spock(spock_payload)
         except Exception as e:
-            # Es importante no fallar el PULL si el PUSH falla.
-            # Solo registramos el error.
             _LOGGER.error(f"Error al hacer PUSH de telemetría a Spock: {e}")
 
-        # Devolvemos los datos crudos de SMA para los sensores locales
-        return sma_data_raw
+        # Devolvemos el diccionario de sensores para 'sensor.py'
+        return sensors_dict
 
-    def _map_sma_to_spock(self, sma_data: dict) -> dict:
+    def _map_sma_to_spock(self, sensors_dict: dict) -> dict:
         """
-        Función de mapeo.
-        Transforma las claves de SMA a las claves que tu API de Spock espera.
-        Incluye lógica para promediar voltajes y corrientes trifásicos.
+        Toma el diccionario de sensores de pysma y lo mapea
+        al payload que espera la API de Spock.
         """
         
-        def get_avg_or_single(base_key: str) -> Optional[float]:
-            """
-            Calcula el promedio si hay L1, L2, L3, o devuelve L1 si es monofásico.
-            base_key debe ser "Measurement.Grid.V" o "Measurement.Grid.A"
-            """
-            keys = [f"{base_key}.L1", f"{base_key}.L2", f"{base_key}.L3"]
-            values = []
-            
-            for key in keys:
-                val = sma_data.get(key)
-                if isinstance(val, (int, float)):
-                    values.append(val)
-            
-            if not values:
-                return None
-            
-            # Devuelve el promedio de las fases encontradas
-            return sum(values) / len(values)
+        # 1. Potencia de Batería
+        charge = sensors_dict.get("battery_power_charge_total", 0) or 0
+        discharge = sensors_dict.get("battery_power_discharge_total", 0) or 0
+        battery_power = charge - discharge
 
-        # --- Fin de la función helper ---
+        # 2. PV Power (Suma de strings A y B)
+        pv_a = sensors_dict.get("pv_power_a", 0) or 0
+        pv_b = sensors_dict.get("pv_power_b", 0) or 0
+        pv_power = pv_a + pv_b
+        
+        # 3. Datos de Red (grid_power)
+        grid_power = sensors_dict.get("grid_power")
 
-        avg_grid_voltage = get_avg_or_single("Measurement.Grid.V")
-        avg_grid_current = get_avg_or_single("Measurement.Grid.A")
-
-        # Mapeo de SMA a Spock
+        # 4. Mapeo final
         spock_payload = {
-            # Batería
-            "battery_soc": sma_data.get("Measurement.Bat.ChaStt"),
-            "battery_power": sma_data.get("Measurement.Bat.P"),
-            "battery_voltage": sma_data.get("Measurement.Bat.V"),
-            "battery_current": sma_data.get("Measurement.Bat.A"),
-            "battery_temperature": sma_data.get("Measurement.Bat.Temp"),
-            
-            # Potencias
-            "grid_power": sma_data.get("Measurement.Grid.P"),
-            "pv_power": sma_data.get("Measurement.Pv.P"),
-            "load_power": sma_data.get("Measurement.Consumption.P"),
-            
-            # Red (Valores calculados)
-            "grid_voltage": avg_grid_voltage,
-            "grid_current": avg_grid_current,
-            "grid_frequency": sma_data.get("Measurement.Grid.F"),
+            "plant_id": str(self._plant_id),
+            "bat_soc": str(sensors_dict.get("battery_soc_total")),
+            "bat_power": str(battery_power),
+            "pv_power": str(pv_power),
+            "ongrid_power": str(grid_power),
+            "bat_charge_allowed": "true", # Hardcoded
+            "bat_discharge_allowed": "true", # Hardcoded
+            "bat_capacity": "0", # Hardcoded
+            "total_grid_output_energy": str(grid_power) # Mapeado
         }
         
-        # Filtra valores nulos (None)
-        return {k: v for k, v in spock_payload.items() if v is not None}
+        # Filtra valores "None" (pysma puede devolver None)
+        return {k: v for k, v in spock_payload.items() if v != "None"}
 
 
-    async def _async_push_to_spock(self, sma_data_raw: dict):
+    async def _async_push_to_spock(self, spock_payload: dict):
         """Envía la telemetría formateada a la API de Spock."""
         
-        spock_data = self._map_sma_to_spock(sma_data_raw)
-        
-        spock_data["plant_id"] = self._plant_id
-        
-        _LOGGER.debug(f"Haciendo PUSH a {self._spock_api_url} con payload: {spock_data}")
+        _LOGGER.debug(f"Haciendo PUSH a {self._spock_api_url} con payload: {spock_payload}")
         
         try:
             async with async_timeout.timeout(10):
-                response = await self._session.post(
+                response = await self._http_session.post(
                     self._spock_api_url,
-                    json=spock_data,
+                    json=spock_payload,
                     headers=self._headers,
                 )
                 response.raise_for_status()
