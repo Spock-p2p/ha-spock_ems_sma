@@ -49,7 +49,6 @@ async def validate_input(hass, data: dict):
     connector_args = {}
     if data[CONF_SSL]:
         # --- LÓGICA HARDCODED ---
-        # Siempre usamos un contexto SSL que NO verifica el certificado
         _LOGGER.debug("Usando SSL sin verificación (Hardcoded)")
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
@@ -57,11 +56,58 @@ async def validate_input(hass, data: dict):
         connector_args["ssl"] = ssl_context
     
     connector = TCPConnector(**connector_args)
-    # Creamos una sesión nueva para la validación
-    # Usamos la sesión de HA, pero con nuestro conector
+    
+    # --- ¡ESTAS SON LAS LÍNEAS CORRECTAS! ---
+    # 1. Crear la sesión
     session = async_get_clientsession(hass, connector=connector)
     
+    # 2. Crear el objeto SMA
     sma = SMAWebConnect(
         session=session,
         url=url,
         password=data[CONF_PASSWORD],
+        group=data[CONF_GROUP]
+    )
+    # --- FIN DE LA CORRECCIÓN ---
+    
+    # Intenta iniciar sesión y obtener info
+    await sma.new_session()
+    device_info = await sma.device_info()
+    await sma.close_session()
+    
+    return {"title": data[CONF_HOST], "serial": device_info.serial}
+
+
+class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Flujo de configuración para Spock EMS SMA."""
+
+    VERSION = 1
+
+    async def async_step_user(self, user_input=None):
+        """Maneja el paso de configuración inicial del usuario."""
+        errors = {}
+
+        if user_input is not None:
+            try:
+                _LOGGER.info(f"Probando conexión con SMA en {user_input[CONF_HOST]}")
+                info = await validate_input(self.hass, user_input)
+                _LOGGER.info(f"Conexión con SMA exitosa. Serial: {info['serial']}")
+                
+                await self.async_set_unique_id(info["serial"])
+                self._abort_if_unique_id_configured()
+                
+                return self.async_create_entry(title=info["title"], data=user_input)
+
+            except SmaAuthenticationException:
+                _LOGGER.warning("Falló la validación de SMA: Autenticación inválida")
+                errors["base"] = "invalid_auth"
+            except (SmaConnectionException, ClientError, TimeoutError):
+                _LOGGER.warning("Falló la validación de SMA: No se puede conectar")
+                errors["base"] = "cannot_connect"
+            except Exception as e:
+                _LOGGER.error(f"Error desconocido en validación de SMA: {e}")
+                errors["base"] = "unknown"
+            
+        return self.async_show_form(
+            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+        )
