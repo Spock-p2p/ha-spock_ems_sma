@@ -1,12 +1,13 @@
 import logging
 import voluptuous as vol
+from voluptuous import Coerce  # <--- 1. IMPORTACIÓN AÑADIDA
 from aiohttp.web import Response
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from pysma import SMAWebConnect # Importado para Fase 2
+from pysma import SMAWebConnect 
 
 from .const import DOMAIN, SPOCK_COMMAND_API_PATH
 
@@ -17,7 +18,7 @@ COMMAND_SCHEMA = vol.Schema(
     {
         vol.Required("plant_id"): cv.string,
         vol.Required("command"): cv.string,
-        vol.Optional("value"): cv.Coerce(float),
+        vol.Optional("value"): Coerce(float), # <--- 2. CORREGIDO (quitado 'vol.' o 'cv.')
     }
 )
 
