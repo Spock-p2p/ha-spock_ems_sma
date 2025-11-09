@@ -1,16 +1,16 @@
 import logging
 import voluptuous as vol
-from aiohttp import ClientError, TCPConnector
-import ssl
+from aiohttp import ClientError
+# import ssl (ya no se usa)
+# from aiohttp import TCPConnector (ya no se usa)
 
 from homeassistant import config_entries
 from homeassistant.const import (
     CONF_HOST,
-    CONF_USERNAME,
     CONF_PASSWORD,
     CONF_SSL,
 )
-from homeassistant.core import callback
+# from homeassistant.core import callback (no se usa)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from pysma import SMAWebConnect, SmaAuthenticationException, SmaConnectionException
@@ -46,33 +46,26 @@ async def validate_input(hass, data: dict):
     protocol = "https" if data[CONF_SSL] else "http"
     url = f"{protocol}://{data[CONF_HOST]}"
     
-    connector_args = {}
-    if data[CONF_SSL]:
-        # --- LÓGICA HARDCODED ---
-        _LOGGER.debug("Usando SSL sin verificación (Hardcoded)")
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        connector_args["ssl"] = ssl_context
+    # --- ¡CORRECCIÓN! ---
+    # La forma correcta y no-bloqueante de obtener una sesión
+    # que no verifica SSL (hardcoded).
+    _LOGGER.debug("Creando sesión de aiohttp con verify_ssl=False (Hardcoded)")
+    session = async_get_clientsession(hass, verify_ssl=False)
+    # --- FIN DE LA CORRECCIÓN ---
     
-    connector = TCPConnector(**connector_args)
-    
-    # --- ¡ESTAS SON LAS LÍNEAS CORRECTAS! ---
-    # 1. Crear la sesión
-    session = async_get_clientsession(hass, connector=connector)
-    
-    # 2. Crear el objeto SMA
     sma = SMAWebConnect(
         session=session,
         url=url,
         password=data[CONF_PASSWORD],
         group=data[CONF_GROUP]
     )
-    # --- FIN DE LA CORRECCIÓN ---
     
     # Intenta iniciar sesión y obtener info
+    # Nota: La sesión no se cierra aquí, pysma la reutilizará
     await sma.new_session()
     device_info = await sma.device_info()
+    
+    # Cerramos la sesión de validación explícitamente
     await sma.close_session()
     
     return {"title": data[CONF_HOST], "serial": device_info.serial}
@@ -105,7 +98,7 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.warning("Falló la validación de SMA: No se puede conectar")
                 errors["base"] = "cannot_connect"
             except Exception as e:
-                _LOGGER.error(f"Error desconocido en validación de SMA: {e}")
+                _LOGGER.error(f"Error desconocido en validación de SMA: {e}", exc_info=True)
                 errors["base"] = "unknown"
             
         return self.async_show_form(
