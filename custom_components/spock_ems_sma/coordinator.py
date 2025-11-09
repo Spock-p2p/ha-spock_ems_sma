@@ -7,7 +7,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-# ... (imports de pysma) ...
+
 from pysma import (
     SMAWebConnect,
     SmaAuthenticationException,
@@ -37,15 +37,14 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         """Inicializa el coordinador."""
         self.pysma_api = pysma_api
         self.hass = hass
-        self._http_session = http_session
+        self._http_session = http_session # Sesión para el PUSH
         self._spock_api_url = spock_api_url
         self._plant_id = plant_id
         self._headers = {"Authorization": f"Bearer {api_token}"}
         
-        self.sensors = None
+        self.sensors = None # Lista de sensores de pysma
         
         # --- NUEVO ATRIBUTO PARA EL SWITCH ---
-        # Por defecto, la operativa está HABILITADA
         self.polling_enabled = True 
         
         super().__init__(
@@ -55,7 +54,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             update_interval=SCAN_INTERVAL_SMA,
         )
 
-    # ... (la función async_initialize_sensors no cambia) ...
     async def async_initialize_sensors(self):
         """Obtiene la lista de sensores disponibles de pysma una vez."""
         try:
@@ -66,7 +64,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             _LOGGER.error(f"Error al inicializar sensores de pysma: {e}")
             raise UpdateFailed(f"No se pudo obtener la lista de sensores: {e}")
 
-
     async def _async_update_data(self) -> Dict[str, Any]:
         """
         Función principal de polling.
@@ -74,10 +71,8 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         Paso 2: PUSH de datos a Spock.
         """
         
-        # --- ¡COMPROBACIÓN DEL SWITCH MAESTRO! ---
         if not self.polling_enabled:
             _LOGGER.debug("Operativa global desactivada por el switch maestro. Saltando PULL/PUSH.")
-            # Devolvemos los datos anteriores para no 'romper' los sensores
             return self.data 
 
         if not self.sensors:
@@ -106,7 +101,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         # Devolvemos el diccionario de sensores para 'sensor.py'
         return sensors_dict
 
-    # ... (el resto de _map_sma_to_spock y _async_push_to_spock no cambian) ...
     def _map_sma_to_spock(self, sensors_dict: dict) -> dict:
         """
         Toma el diccionario de sensores de pysma y lo mapea
@@ -139,8 +133,10 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             "total_grid_output_energy": str(grid_power) # Mapeado
         }
         
-        # Filtra valores "None" (pysma puede devolver None)
-        return {k: v for k, v in spock_payload.items() if v != "None"}
+        # --- ¡FILTRO ELIMINADO! ---
+        # Ahora el payload se enviará completo, incluyendo "None" como string,
+        # exactamente igual que hacía el componente de Marstek.
+        return spock_payload
 
 
     async def _async_push_to_spock(self, spock_payload: dict):
