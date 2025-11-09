@@ -8,19 +8,17 @@ from homeassistant.components.sensor import (
 from homeassistant.const import (
     UnitOfPower,
     PERCENTAGE,
-    UnitOfElectricPotential,
-    UnitOfElectricCurrent,
-    UnitOfFrequency,
     UnitOfTemperature,
 )
+# Importamos DeviceInfo para el type hint
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
+from .coordinator import SmaTelemetryCoordinator # Importamos el coordinador
 
 _LOGGER = logging.getLogger(__name__)
 
-# --- MAPEO DE SENSORES LOCALES ---
-# Claves de PYSMA que queremos exponer como sensores en HA
-# (Las claves deben coincidir con las de pysma, ej: "grid_power")
+# ... (SENSOR_MAP sigue igual que antes) ...
 SENSOR_MAP = {
     "battery_soc_total": {
         "name": "SMA Batería SOC",
@@ -80,11 +78,21 @@ SENSOR_MAP = {
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Configura los sensores desde la config entry."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator: SmaTelemetryCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     
+    # --- NUEVO: Creamos el objeto DeviceInfo ---
+    sma_device = coordinator.sma_device_info
+    device_info = DeviceInfo(
+        identifiers={(DOMAIN, sma_device.serial)},
+        name=sma_device.name,
+        manufacturer=sma_device.manufacturer,
+        model=sma_device.type,
+        sw_version=sma_device.sw_version,
+    )
+    # --- Fin ---
+
     sensors = []
     for pysma_key, config in SENSOR_MAP.items():
-        # Solo añade el sensor si la clave existe en el primer refresh
         if pysma_key in coordinator.data:
             sensors.append(
                 SpockSmaSensor(
@@ -92,17 +100,25 @@ async def async_setup_entry(hass, entry, async_add_entities):
                     entry_id=entry.entry_id,
                     pysma_key=pysma_key,
                     config=config,
+                    device_info=device_info # <-- Pasamos el device_info
                 )
             )
         else:
-            _LOGGER.debug(f"Sensor '{pysma_key}' no encontrado en datos de SMA, se omitirá.")
+            _LOGGER.debug(f"Sensor '{pysma_key}' no encontrado, se omitirá.")
     
     async_add_entities(sensors)
 
 class SpockSmaSensor(CoordinatorEntity, SensorEntity):
     """Sensor que lee datos del Coordinador de telemetría SMA."""
 
-    def __init__(self, coordinator, entry_id, pysma_key, config):
+    def __init__(
+        self, 
+        coordinator: SmaTelemetryCoordinator, 
+        entry_id: str, 
+        pysma_key: str, 
+        config: dict,
+        device_info: DeviceInfo # <-- Recibimos el device_info
+    ):
         super().__init__(coordinator)
         self._data_key = pysma_key
         
@@ -113,8 +129,8 @@ class SpockSmaSensor(CoordinatorEntity, SensorEntity):
         self._attr_state_class = config.get("state_class")
         self._attr_unique_id = f"{entry_id}_{pysma_key}"
         
-        # (Opcional) Enlazar entidad a un dispositivo
-        # self._attr_device_info = ... 
+        # --- NUEVO: Asignamos la entidad a un dispositivo ---
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
