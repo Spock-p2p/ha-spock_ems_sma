@@ -21,9 +21,15 @@ from .const import DOMAIN, SCAN_INTERVAL_SMA
 
 _LOGGER = logging.getLogger(__name__)
 
-# --- ESTA FUNCIÓN HELPER YA NO ES NECESARIA ---
-# def _safe_int_str(val: Any) -> str:
-# ...
+def to_int_str_or_none(val: Any) -> Optional[str]:
+    """Convierte un valor a int-string, o devuelve None (objeto)."""
+    if val is None:
+        return None
+    try:
+        # Convertimos a float, luego a int (para truncar), luego a str
+        return str(int(float(val)))
+    except (ValueError, TypeError):
+        return None # Devuelve None (objeto)
 
 class SmaTelemetryCoordinator(DataUpdateCoordinator):
     """
@@ -64,8 +70,8 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             update_interval=SCAN_INTERVAL_SMA,
         )
 
-    # ... (async_initialize_sensors y _async_update_data no cambian) ...
     async def async_initialize_sensors(self):
+        """Obtiene la info del dispositivo y la lista de sensores."""
         try:
             _LOGGER.info("Obteniendo información del dispositivo SMA...")
             self.sma_device_info = await self.pysma_api.device_info()
@@ -80,9 +86,16 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"No se pudo obtener la lista de sensores: {e}")
 
     async def _async_update_data(self) -> Dict[str, Any]:
+        """
+        Función principal de polling.
+        Paso 1: PULL de datos de SMA (usando pysma).
+        Paso 2: PUSH de datos a Spock.
+        """
+        
         if not self.polling_enabled:
             _LOGGER.debug("Operativa global desactivada por el switch maestro. Saltando PULL/PUSH.")
             return self.data 
+
         if not self.sensors:
             raise UpdateFailed("La lista de sensores de SMA no está inicializada.")
         
@@ -91,6 +104,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             await self.pysma_api.read(self.sensors)
             sensors_dict = {s.name: s.value for s in self.sensors}
             _LOGGER.debug(f"Datos PULL de SMA recibidos: {sensors_dict}")
+
         except (SmaReadException, SmaConnectionException) as err:
             raise UpdateFailed(f"Error al leer SMA: {err}")
         except SmaAuthenticationException as err:
@@ -104,7 +118,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             _LOGGER.error(f"Error al hacer PUSH de telemetría a Spock: {e}")
 
         return sensors_dict
-
 
     def _map_sma_to_spock(self, sensors_dict: dict) -> dict:
         """
@@ -122,23 +135,18 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         pv_b = sensors_dict.get("pv_power_b", 0) or 0
         pv_power = pv_a + pv_b
         
-        # 3. Datos de Red (grid_power)
-        grid_power = sensors_dict.get("grid_power")
+        # --- ¡CORRECCIÓN DE LÓGICA DE RED (SEGÚN TU PETICIÓN)! ---
+        # Usamos los sensores del 'metering' (contador)
+        grid_absorb = sensors_dict.get("metering_power_absorbed", 0) or 0
+        grid_supply = sensors_dict.get("metering_power_supplied", 0) or 0
         
-        # --- ¡CORRECCIÓN APLICADA! ---
-        # El servidor GCF espera strings (para int()) o null/None (para _to_int(None)).
-        # Ya no usamos _safe_int_str, sino que usamos una función que 
-        # convierte a int-string O devuelve None (el objeto).
+        # 'ongrid_power' = valor neto (Importación - Exportación)
+        net_grid_power = grid_absorb - grid_supply
         
-        def to_int_str_or_none(val: Any) -> Optional[str]:
-            """Convierte un valor a int-string, o devuelve None (objeto)."""
-            if val is None:
-                return None
-            try:
-                # Convertimos a float, luego a int (para truncar), luego a str
-                return str(int(float(val)))
-            except (ValueError, TypeError):
-                return None # Devuelve None (objeto)
+        # 'total_grid_output_energy' = valor de exportación bruta
+        # (Tal como pediste, usamos 'metering_power_supplied' para esto)
+        supply_power = grid_supply
+        # --- FIN DE LA CORRECCIÓN ---
 
         # 4. Mapeo final
         spock_payload = {
@@ -146,15 +154,13 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             "bat_soc": to_int_str_or_none(sensors_dict.get("battery_soc_total")),
             "bat_power": to_int_str_or_none(battery_power),
             "pv_power": to_int_str_or_none(pv_power),
-            "ongrid_power": to_int_str_or_none(grid_power),
+            "ongrid_power": to_int_str_or_none(net_grid_power), # <-- Valor NETO
             "bat_charge_allowed": "true",
             "bat_discharge_allowed": "true",
             "bat_capacity": "0",
-            "total_grid_output_energy": to_int_str_or_none(grid_power)
+            "total_grid_output_energy": to_int_str_or_none(supply_power) # <-- Valor BRUTO EXPORT
         }
         
-        # json.dumps convertirá los None (objeto) a 'null' en el JSON,
-        # que tu GCF manejará correctamente.
         return spock_payload
 
 
