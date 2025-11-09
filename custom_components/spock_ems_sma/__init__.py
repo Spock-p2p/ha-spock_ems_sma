@@ -1,6 +1,6 @@
 import logging
-import ssl
-from aiohttp import TCPConnector
+# import ssl (ya no se usa)
+# from aiohttp import TCPConnector (ya no se usa)
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event
@@ -8,7 +8,6 @@ from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
     CONF_SSL,
-    # CONF_VERIFY_SSL no se usa, está hardcoded
     EVENT_HOMEASSISTANT_STOP,
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -38,19 +37,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     protocol = "https" if config[CONF_SSL] else "http"
     url = f"{protocol}://{config[CONF_HOST]}"
     
-    connector_args = {}
-    if config[CONF_SSL]:
-        # --- LÓGICA HARDCODED ---
-        # Siempre usamos un contexto SSL que NO verifica el certificado
-        _LOGGER.debug("Creando conector PYSMA con SSL sin verificación (Hardcoded)")
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        connector_args["ssl"] = ssl_context
-    
-    connector = TCPConnector(**connector_args)
-    # Sesión específica para pysma
-    pysma_session = async_get_clientsession(hass, connector=connector)
+    # --- ¡CORRECCIÓN! ---
+    # Sesión específica para pysma (sin verificar SSL, hardcoded)
+    _LOGGER.debug("Creando sesión PYSMA con verify_ssl=False (Hardcoded)")
+    pysma_session = async_get_clientsession(hass, verify_ssl=False)
+    # --- FIN DE LA CORRECCIÓN ---
 
     pysma_api = SMAWebConnect(
         session=pysma_session,
