@@ -32,9 +32,7 @@ class SpockSmaMasterSwitch(SwitchEntity, RestoreEntity):
         self._attr_name = MASTER_SWITCH_NAME
         self._attr_icon = "mdi:engine" # Icono de "motor"
         
-        # El estado del switch (self._attr_is_on) se sincronizará
-        # con el estado del coordinador (self.coordinator.polling_enabled)
-        # en async_added_to_hass.
+        # El estado se restaura en async_added_to_hass
 
     @property
     def is_on(self) -> bool:
