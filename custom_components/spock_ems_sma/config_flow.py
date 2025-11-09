@@ -10,7 +10,7 @@ from homeassistant.const import (
     CONF_PASSWORD,
     CONF_SSL,
 )
-# from homeassistant.core import callback (no se usa)
+from homeassistant.core import callback  # <--- 1. IMPORTACIÓN AÑADIDA
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from pysma import SMAWebConnect, SmaAuthenticationException, SmaConnectionException
@@ -46,12 +46,8 @@ async def validate_input(hass, data: dict):
     protocol = "https" if data[CONF_SSL] else "http"
     url = f"{protocol}://{data[CONF_HOST]}"
     
-    # --- ¡CORRECCIÓN! ---
-    # La forma correcta y no-bloqueante de obtener una sesión
-    # que no verifica SSL (hardcoded).
     _LOGGER.debug("Creando sesión de aiohttp con verify_ssl=False (Hardcoded)")
     session = async_get_clientsession(hass, verify_ssl=False)
-    # --- FIN DE LA CORRECCIÓN ---
     
     sma = SMAWebConnect(
         session=session,
@@ -60,8 +56,6 @@ async def validate_input(hass, data: dict):
         group=data[CONF_GROUP]
     )
     
-    # Intenta iniciar sesión y obtener info
-    # Nota: La sesión no se cierra aquí, pysma la reutilizará
     await sma.new_session()
     device_info = await sma.device_info()
     
@@ -75,6 +69,13 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Flujo de configuración para Spock EMS SMA."""
 
     VERSION = 1
+
+    # --- 2. MÉTODO AÑADIDO PARA HABILITAR RECONFIGURACIÓN ---
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Obtiene el flujo de opciones para reconfigurar."""
+        return SmaSpockOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input=None):
         """Maneja el paso de configuración inicial del usuario."""
@@ -103,4 +104,64 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             
         return self.async_show_form(
             step_id="user", data_schema=DATA_SCHEMA, errors=errors
+        )
+
+
+# --- 3. CLASE COMPLETAMENTE NUEVA AÑADIDA AL FINAL ---
+class SmaSpockOptionsFlow(config_entries.OptionsFlow):
+    """
+    Maneja el flujo de opciones (reconfiguración).
+    Esto permite al usuario editar la IP, token, etc., después de la configuración.
+    """
+
+    def __init__(self, config_entry: config_entries.ConfigEntry):
+        """Inicializa el flujo de opciones."""
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Maneja el paso inicial del flujo de opciones."""
+        errors = {}
+
+        if user_input is not None:
+            # El usuario ha enviado el formulario de reconfiguración
+            try:
+                # Validamos los *nuevos* datos
+                _LOGGER.info(f"Reconfigurando. Probando nueva conexión con SMA en {user_input[CONF_HOST]}")
+                await validate_input(self.hass, user_input)
+                _LOGGER.info("Validación de reconfiguración exitosa.")
+                
+                # Actualizamos la configuración principal (config_entry.data)
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, data=user_input
+                )
+                
+                # Recargamos la integración
+                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+
+                # Cerramos el flujo de opciones
+                return self.async_create_entry(title="", data={})
+
+            except SmaAuthenticationException:
+                errors["base"] = "invalid_auth"
+            except (SmaConnectionException, ClientError, TimeoutError):
+                errors["base"] = "cannot_connect"
+            except Exception as e:
+                _LOGGER.error(f"Error desconocido en reconfiguración: {e}", exc_info=True)
+                errors["base"] = "unknown"
+        
+        # Mostrar el formulario, pre-llenado con los datos *actuales*
+        # Usamos self.config_entry.data para obtener los valores
+        options_schema = vol.Schema({
+            vol.Required(CONF_PLANT_ID, default=self.config_entry.data.get(CONF_PLANT_ID)): str,
+            vol.Required(CONF_SPOCK_API_TOKEN, default=self.config_entry.data.get(CONF_SPOCK_API_TOKEN)): str,
+            vol.Required(CONF_HOST, default=self.config_entry.data.get(CONF_HOST)): str,
+            vol.Optional(CONF_GROUP, default=self.config_entry.data.get(CONF_GROUP, DEFAULT_GROUP)): vol.In(GROUPS),
+            vol.Required(CONF_PASSWORD, default=self.config_entry.data.get(CONF_PASSWORD)): str,
+            vol.Optional(CONF_SSL, default=self.config_entry.data.get(CONF_SSL, True)): bool,
+        })
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=options_schema,
+            errors=errors
         )
