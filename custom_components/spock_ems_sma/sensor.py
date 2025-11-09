@@ -10,15 +10,14 @@ from homeassistant.const import (
     PERCENTAGE,
     UnitOfTemperature,
 )
-# Importamos DeviceInfo para el type hint
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
-from .coordinator import SmaTelemetryCoordinator # Importamos el coordinador
+from .coordinator import SmaTelemetryCoordinator 
 
 _LOGGER = logging.getLogger(__name__)
 
-# ... (SENSOR_MAP sigue igual que antes) ...
+# --- SENSOR_MAP (sin cambios) ---
 SENSOR_MAP = {
     "battery_soc_total": {
         "name": "SMA Batería SOC",
@@ -80,7 +79,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
     """Configura los sensores desde la config entry."""
     coordinator: SmaTelemetryCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     
-    # --- NUEVO: Creamos el objeto DeviceInfo ---
     sma_device = coordinator.sma_device_info
     device_info = DeviceInfo(
         identifiers={(DOMAIN, sma_device.serial)},
@@ -89,7 +87,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         model=sma_device.type,
         sw_version=sma_device.sw_version,
     )
-    # --- Fin ---
 
     sensors = []
     for pysma_key, config in SENSOR_MAP.items():
@@ -100,7 +97,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                     entry_id=entry.entry_id,
                     pysma_key=pysma_key,
                     config=config,
-                    device_info=device_info # <-- Pasamos el device_info
+                    device_info=device_info
                 )
             )
         else:
@@ -117,7 +114,7 @@ class SpockSmaSensor(CoordinatorEntity, SensorEntity):
         entry_id: str, 
         pysma_key: str, 
         config: dict,
-        device_info: DeviceInfo # <-- Recibimos el device_info
+        device_info: DeviceInfo
     ):
         super().__init__(coordinator)
         self._data_key = pysma_key
@@ -128,13 +125,29 @@ class SpockSmaSensor(CoordinatorEntity, SensorEntity):
         self._attr_device_class = config.get("device_class")
         self._attr_state_class = config.get("state_class")
         self._attr_unique_id = f"{entry_id}_{pysma_key}"
-        
-        # --- NUEVO: Asignamos la entidad a un dispositivo ---
         self._attr_device_info = device_info
 
     @property
     def native_value(self):
-        """Retorna el valor del sensor desde el coordinador."""
-        if self.coordinator.data:
-            return self.coordinator.data.get(self._data_key)
-        return None
+        """Retorna el valor del sensor como un float (o string para 'status')."""
+        if not self.coordinator.data:
+            return None
+        
+        value = self.coordinator.data.get(self._data_key)
+        
+        if value is None:
+            return None
+        
+        # --- ¡LA SOLUCIÓN! ---
+        
+        # El sensor 'status' es un string, lo devolvemos tal cual.
+        if self._data_key == "status":
+            return value
+        
+        # Forzamos todos los demás valores a float.
+        # Los sensores de Potencia/Batería de HA fallan en la UI si reciben un integer.
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            # Si el valor es algo inesperado (ej. "N/A"), devuelve None
+            return None
