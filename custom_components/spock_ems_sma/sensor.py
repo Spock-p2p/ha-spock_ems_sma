@@ -17,7 +17,7 @@ from .coordinator import SmaTelemetryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# --- SENSOR_MAP (sin cambios) ---
+# ... (SENSOR_MAP sigue igual) ...
 SENSOR_MAP = {
     "battery_soc_total": {
         "name": "SMA Batería SOC",
@@ -119,7 +119,6 @@ class SpockSmaSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._data_key = pysma_key
         
-        # Atributos de la entidad
         self._attr_name = config["name"]
         self._attr_native_unit_of_measurement = config.get("unit")
         self._attr_device_class = config.get("device_class")
@@ -139,15 +138,13 @@ class SpockSmaSensor(CoordinatorEntity, SensorEntity):
             return None
         
         # --- ¡LA SOLUCIÓN! ---
-        
         # El sensor 'status' es un string, lo devolvemos tal cual.
         if self._data_key == "status":
             return value
         
         # Forzamos todos los demás valores a float.
-        # Los sensores de Potencia/Batería de HA fallan en la UI si reciben un integer.
+        # Esto soluciona el bug de la UI
         try:
             return float(value)
         except (ValueError, TypeError):
-            # Si el valor es algo inesperado (ej. "N/A"), devuelve None
             return None
