@@ -9,14 +9,16 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-# Importamos DeviceInfo de pysma
+# --- ¡CORRECCIÓN AQUÍ! ---
 from pysma import (
     SMAWebConnect,
     SmaAuthenticationException,
     SmaConnectionException,
     SmaReadException,
-    DeviceInfo, 
 )
+# DeviceInfo se importa desde 'helpers'
+from pysma.helpers import DeviceInfo 
+# --- FIN DE LA CORRECCIÓN ---
 
 from .const import DOMAIN, SCAN_INTERVAL_SMA
 
@@ -43,6 +45,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         self._http_session = http_session
         self._spock_api_url = spock_api_url
         self._plant_id = plant_id
+        
         self._headers = {
             "X-Auth-Token": api_token, 
             "Content-Type": "application/json",
@@ -51,7 +54,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         self.sensors = None
         self.polling_enabled = True 
         
-        # --- NUEVO: Almacén para la info del dispositivo ---
         self.sma_device_info: Optional[DeviceInfo] = None
         
         super().__init__(
@@ -65,7 +67,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         """Obtiene la info del dispositivo y la lista de sensores."""
         try:
             _LOGGER.info("Obteniendo información del dispositivo SMA...")
-            # --- NUEVO: Guardamos la info del dispositivo ---
             self.sma_device_info = await self.pysma_api.device_info()
             _LOGGER.info(f"Dispositivo encontrado: {self.sma_device_info.name} (Serial: {self.sma_device_info.serial})")
 
@@ -76,10 +77,6 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.error(f"Error al inicializar sensores de pysma: {e}")
             raise UpdateFailed(f"No se pudo obtener la lista de sensores: {e}")
-
-    # ... (El resto del archivo 'coordinator.py' no cambia) ...
-    # _async_update_data, _map_sma_to_spock, y _async_push_to_spock
-    # son idénticos a la versión anterior.
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """
