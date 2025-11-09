@@ -9,20 +9,34 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-# --- ¡CORRECCIÓN AQUÍ! ---
 from pysma import (
     SMAWebConnect,
     SmaAuthenticationException,
     SmaConnectionException,
     SmaReadException,
 )
-# DeviceInfo se importa desde 'helpers'
 from pysma.helpers import DeviceInfo 
-# --- FIN DE LA CORRECCIÓN ---
 
 from .const import DOMAIN, SCAN_INTERVAL_SMA
 
 _LOGGER = logging.getLogger(__name__)
+
+# --- ¡NUEVA FUNCIÓN HELPER! ---
+def _safe_int_str(val: Any) -> str:
+    """
+    Convierte un valor (posiblemente float o None) a un string de entero.
+    Esto es necesario porque la GCF usa int() y falla con strings de floats.
+    Ej: 123.45 -> "123"
+        None -> "None"
+    """
+    if val is None:
+        return "None"
+    try:
+        # Forzamos la conversión a float, luego a int (para truncar), luego a str
+        return str(int(float(val)))
+    except (ValueError, TypeError):
+        # Si falla, devuelve "None" como hacía el componente Marstek
+        return "None"
 
 class SmaTelemetryCoordinator(DataUpdateCoordinator):
     """
@@ -113,27 +127,35 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         return sensors_dict
 
     def _map_sma_to_spock(self, sensors_dict: dict) -> dict:
-        """Mapea datos de SMA al formato de Spock."""
+        """
+        Toma el diccionario de sensores de pysma y lo mapea
+        al payload que espera la API de Spock.
+        """
+        
+        # 1. Potencia de Batería
         charge = sensors_dict.get("battery_power_charge_total", 0) or 0
         discharge = sensors_dict.get("battery_power_discharge_total", 0) or 0
         battery_power = charge - discharge
 
+        # 2. PV Power (Suma de strings A y B)
         pv_a = sensors_dict.get("pv_power_a", 0) or 0
         pv_b = sensors_dict.get("pv_power_b", 0) or 0
         pv_power = pv_a + pv_b
         
+        # 3. Datos de Red (grid_power)
         grid_power = sensors_dict.get("grid_power")
 
+        # 4. Mapeo final (USANDO EL NUEVO HELPER _safe_int_str)
         spock_payload = {
             "plant_id": str(self._plant_id),
-            "bat_soc": str(sensors_dict.get("battery_soc_total")),
-            "bat_power": str(battery_power),
-            "pv_power": str(pv_power),
-            "ongrid_power": str(grid_power),
+            "bat_soc": _safe_int_str(sensors_dict.get("battery_soc_total")),
+            "bat_power": _safe_int_str(battery_power),
+            "pv_power": _safe_int_str(pv_power),
+            "ongrid_power": _safe_int_str(grid_power),
             "bat_charge_allowed": "true",
             "bat_discharge_allowed": "true",
             "bat_capacity": "0",
-            "total_grid_output_energy": str(grid_power)
+            "total_grid_output_energy": _safe_int_str(grid_power)
         }
         
         return spock_payload
@@ -141,6 +163,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
 
     async def _async_push_to_spock(self, spock_payload: dict):
         """Envía la telemetría formateada a la API de Spock."""
+        
         _LOGGER.debug(f"Haciendo PUSH a {self._spock_api_url} con payload: {spock_payload}")
         
         serialized_payload = json.dumps(spock_payload)
