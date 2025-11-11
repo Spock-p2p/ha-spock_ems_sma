@@ -3,7 +3,7 @@ from datetime import timedelta
 DOMAIN = "spock_ems_sma"
 
 # --- Configuración de Polling (Telemetría SMA) ---
-SCAN_INTERVAL_SMA = timedelta(seconds=10)
+SCAN_INTERVAL_SMA = timedelta(seconds=30)
 
 # --- Configuración de la API de Spock (PUSH/PULL) ---
 SPOCK_TELEMETRY_API_ENDPOINT = "https://ems-ha.spock.es/api/ems_marstek" 
