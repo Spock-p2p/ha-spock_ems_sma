@@ -1,30 +1,22 @@
-"""Constantes de la integración Spock EMS SMA."""
+"""Constants for the Spock EMS SMA integration."""
 
-from datetime import timedelta
+DOMAIN = "ha_spock_ems_sma"
 
-DOMAIN = "spock_ems_sma"
+# Config Keys
+CONF_SMA_IP = "sma_ip"
+CONF_SMA_PORT = "sma_port"
+CONF_SMA_UNIT_ID = "sma_unit_id"
 
-# ---------------------------------------
-# Configuración de Spock API
-# ---------------------------------------
-API_ENDPOINT = "https://api.spock.energy/v1/ems/push"
-CONF_API_TOKEN = "api_token"
-CONF_PLANT_ID = "plant_id"
+# Defaults
+DEFAULT_SMA_PORT = 502
+DEFAULT_SMA_UNIT_ID = 3
 
-# ---------------------------------------
-# Parámetros PV existentes (lectura)
-# ---------------------------------------
-CONF_PV_IP = "pv_ip"
-CONF_PV_PORT = "pv_port"
-CONF_PV_SLAVE = "pv_slave"
+# SMA Modbus Registers
+# 40149: Active Power Setpoint (Signed 32-bit) - Negativo=Carga, Positivo=Descarga
+SMA_REG_SETPOINT = 40149 
+# 40151: Control Mode (Unsigned 32-bit) - 802=Manual, 803=Auto
+SMA_REG_CONTROL_MODE = 40151
 
-# ---------------------------------------
-# NUEVOS — Parámetros Modbus (control batería)
-# ---------------------------------------
-CONF_MODBUS_PORT = "modbus_port"         # default: 502
-CONF_MODBUS_UNIT_ID = "modbus_unit_id"   # default: 3
-
-# ---------------------------------------
-# Intervalo de Polling (lectura telemetría SMA)
-# ---------------------------------------
-SCAN_INTERVAL_SMA = timedelta(seconds=30)
+# SMA Control Values
+SMA_MODE_MANUAL = 802
+SMA_MODE_AUTO = 803
