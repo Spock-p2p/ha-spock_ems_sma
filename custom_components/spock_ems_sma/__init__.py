@@ -19,7 +19,6 @@ from .const import (
     CONF_PLANT_ID,
     PLATFORMS,
     SPOCK_TELEMETRY_API_ENDPOINT,
-    CONF_MODBUS_PORT,
     CONF_MODBUS_UNIT_ID,
 )
 from .coordinator import SmaTelemetryCoordinator
@@ -52,7 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     http_session = async_get_clientsession(hass)
 
     # Parámetros Modbus para control de batería
-    modbus_port = int(config.get(CONF_MODBUS_PORT, 502))
+    modbus_port = 502  # Hardcoded como acordado
     modbus_unit_id = int(config.get(CONF_MODBUS_UNIT_ID, 3))
 
     # Coordinador: PULL de SMA + PUSH a Spock + aplicación de comandos (Modbus)
