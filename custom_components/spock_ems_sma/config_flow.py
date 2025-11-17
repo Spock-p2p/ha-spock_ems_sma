@@ -10,7 +10,7 @@ from homeassistant.const import (
     CONF_PASSWORD,
     CONF_SSL,
 )
-from homeassistant.core import callback  # <--- 1. IMPORTACIÓN AÑADIDA
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from pysma import SMAWebConnect, SmaAuthenticationException, SmaConnectionException
@@ -22,11 +22,12 @@ from .const import (
     CONF_GROUP,
     GROUPS,
     DEFAULT_GROUP,
+    CONF_MODBUS_PORT,
+    CONF_MODBUS_UNIT_ID,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# Schema de Configuración (Reordenado y sin 'verify_ssl')
 DATA_SCHEMA = vol.Schema(
     {
         # --- Spock (Primero) ---
@@ -37,31 +38,34 @@ DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_GROUP, default=DEFAULT_GROUP): vol.In(GROUPS),
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(CONF_SSL, default=True): bool,
+        # --- NUEVOS: Parámetros Modbus ---
+        vol.Optional(CONF_MODBUS_PORT, default=502): int,
+        vol.Optional(CONF_MODBUS_UNIT_ID, default=3): int,
     }
 )
 
+
 async def validate_input(hass, data: dict):
     """Valida la conexión con SMA usando pysma."""
-    
     protocol = "https" if data[CONF_SSL] else "http"
     url = f"{protocol}://{data[CONF_HOST]}"
-    
+
     _LOGGER.debug("Creando sesión de aiohttp con verify_ssl=False (Hardcoded)")
     session = async_get_clientsession(hass, verify_ssl=False)
-    
+
     sma = SMAWebConnect(
         session=session,
         url=url,
         password=data[CONF_PASSWORD],
-        group=data[CONF_GROUP]
+        group=data[CONF_GROUP],
     )
-    
+
     await sma.new_session()
     device_info = await sma.device_info()
-    
+
     # Cerramos la sesión de validación explícitamente
     await sma.close_session()
-    
+
     return {"title": data[CONF_HOST], "serial": device_info.serial}
 
 
@@ -70,7 +74,6 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    # --- 2. MÉTODO AÑADIDO PARA HABILITAR RECONFIGURACIÓN ---
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
@@ -85,29 +88,39 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 _LOGGER.info(f"Probando conexión con SMA en {user_input[CONF_HOST]}")
                 info = await validate_input(self.hass, user_input)
-                _LOGGER.info(f"Conexión con SMA exitosa. Serial: {info['serial']}")
-                
+                _LOGGER.info(
+                    f"Conexión con SMA exitosa. Serial: {info['serial']}"
+                )
+
                 await self.async_set_unique_id(info["serial"])
                 self._abort_if_unique_id_configured()
-                
-                return self.async_create_entry(title=info["title"], data=user_input)
+
+                return self.async_create_entry(
+                    title=info["title"], data=user_input
+                )
 
             except SmaAuthenticationException:
-                _LOGGER.warning("Falló la validación de SMA: Autenticación inválida")
+                _LOGGER.warning(
+                    "Falló la validación de SMA: Autenticación inválida"
+                )
                 errors["base"] = "invalid_auth"
             except (SmaConnectionException, ClientError, TimeoutError):
-                _LOGGER.warning("Falló la validación de SMA: No se puede conectar")
+                _LOGGER.warning(
+                    "Falló la validación de SMA: No se puede conectar"
+                )
                 errors["base"] = "cannot_connect"
             except Exception as e:
-                _LOGGER.error(f"Error desconocido en validación de SMA: {e}", exc_info=True)
+                _LOGGER.error(
+                    f"Error desconocido en validación de SMA: {e}",
+                    exc_info=True,
+                )
                 errors["base"] = "unknown"
-            
+
         return self.async_show_form(
             step_id="user", data_schema=DATA_SCHEMA, errors=errors
         )
 
 
-# --- 3. CLASE COMPLETAMENTE NUEVA AÑADIDA AL FINAL ---
 class SmaSpockOptionsFlow(config_entries.OptionsFlow):
     """
     Maneja el flujo de opciones (reconfiguración).
@@ -125,18 +138,21 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             # El usuario ha enviado el formulario de reconfiguración
             try:
-                # Validamos los *nuevos* datos
-                _LOGGER.info(f"Reconfigurando. Probando nueva conexión con SMA en {user_input[CONF_HOST]}")
+                _LOGGER.info(
+                    f"Reconfigurando. Probando nueva conexión con SMA en {user_input[CONF_HOST]}"
+                )
                 await validate_input(self.hass, user_input)
                 _LOGGER.info("Validación de reconfiguración exitosa.")
-                
+
                 # Actualizamos la configuración principal (config_entry.data)
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, data=user_input
                 )
-                
+
                 # Recargamos la integración
-                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+                await self.hass.config_entries.async_reload(
+                    self.config_entry.entry_id
+                )
 
                 # Cerramos el flujo de opciones
                 return self.async_create_entry(title="", data={})
@@ -146,22 +162,44 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
             except (SmaConnectionException, ClientError, TimeoutError):
                 errors["base"] = "cannot_connect"
             except Exception as e:
-                _LOGGER.error(f"Error desconocido en reconfiguración: {e}", exc_info=True)
+                _LOGGER.error(
+                    f"Error desconocido en reconfiguración: {e}",
+                    exc_info=True,
+                )
                 errors["base"] = "unknown"
-        
+
         # Mostrar el formulario, pre-llenado con los datos *actuales*
-        # Usamos self.config_entry.data para obtener los valores
-        options_schema = vol.Schema({
-            vol.Required(CONF_PLANT_ID, default=self.config_entry.data.get(CONF_PLANT_ID)): str,
-            vol.Required(CONF_SPOCK_API_TOKEN, default=self.config_entry.data.get(CONF_SPOCK_API_TOKEN)): str,
-            vol.Required(CONF_HOST, default=self.config_entry.data.get(CONF_HOST)): str,
-            vol.Optional(CONF_GROUP, default=self.config_entry.data.get(CONF_GROUP, DEFAULT_GROUP)): vol.In(GROUPS),
-            vol.Required(CONF_PASSWORD, default=self.config_entry.data.get(CONF_PASSWORD)): str,
-            vol.Optional(CONF_SSL, default=self.config_entry.data.get(CONF_SSL, True)): bool,
-        })
+        data = self.config_entry.data
+        options_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_PLANT_ID, default=data.get(CONF_PLANT_ID)
+                ): str,
+                vol.Required(
+                    CONF_SPOCK_API_TOKEN,
+                    default=data.get(CONF_SPOCK_API_TOKEN),
+                ): str,
+                vol.Required(CONF_HOST, default=data.get(CONF_HOST)): str,
+                vol.Optional(
+                    CONF_GROUP,
+                    default=data.get(CONF_GROUP, DEFAULT_GROUP),
+                ): vol.In(GROUPS),
+                vol.Required(
+                    CONF_PASSWORD, default=data.get(CONF_PASSWORD)
+                ): str,
+                vol.Optional(
+                    CONF_SSL, default=data.get(CONF_SSL, True)
+                ): bool,
+                vol.Optional(
+                    CONF_MODBUS_PORT, default=data.get(CONF_MODBUS_PORT, 502)
+                ): int,
+                vol.Optional(
+                    CONF_MODBUS_UNIT_ID,
+                    default=data.get(CONF_MODBUS_UNIT_ID, 3),
+                ): int,
+            }
+        )
 
         return self.async_show_form(
-            step_id="init",
-            data_schema=options_schema,
-            errors=errors
+            step_id="init", data_schema=options_schema, errors=errors
         )
