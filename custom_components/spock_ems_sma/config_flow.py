@@ -22,7 +22,6 @@ from .const import (
     CONF_GROUP,
     GROUPS,
     DEFAULT_GROUP,
-    CONF_MODBUS_PORT,
     CONF_MODBUS_UNIT_ID,
 )
 
@@ -38,8 +37,7 @@ DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_GROUP, default=DEFAULT_GROUP): vol.In(GROUPS),
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(CONF_SSL, default=True): bool,
-        # --- NUEVOS: Parámetros Modbus ---
-        vol.Optional(CONF_MODBUS_PORT, default=502): int,
+        # --- NUEVO: Unit ID Modbus ---
         vol.Optional(CONF_MODBUS_UNIT_ID, default=3): int,
     }
 )
@@ -47,6 +45,7 @@ DATA_SCHEMA = vol.Schema(
 
 async def validate_input(hass, data: dict):
     """Valida la conexión con SMA usando pysma."""
+
     protocol = "https" if data[CONF_SSL] else "http"
     url = f"{protocol}://{data[CONF_HOST]}"
 
@@ -86,10 +85,12 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                _LOGGER.info(f"Probando conexión con SMA en {user_input[CONF_HOST]}")
+                _LOGGER.info(
+                    "Probando conexión con SMA en %s", user_input[CONF_HOST]
+                )
                 info = await validate_input(self.hass, user_input)
                 _LOGGER.info(
-                    f"Conexión con SMA exitosa. Serial: {info['serial']}"
+                    "Conexión con SMA exitosa. Serial: %s", info["serial"]
                 )
 
                 await self.async_set_unique_id(info["serial"])
@@ -111,8 +112,7 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             except Exception as e:
                 _LOGGER.error(
-                    f"Error desconocido en validación de SMA: {e}",
-                    exc_info=True,
+                    "Error desconocido en validación de SMA: %s", e, exc_info=True
                 )
                 errors["base"] = "unknown"
 
@@ -139,7 +139,8 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
             # El usuario ha enviado el formulario de reconfiguración
             try:
                 _LOGGER.info(
-                    f"Reconfigurando. Probando nueva conexión con SMA en {user_input[CONF_HOST]}"
+                    "Reconfigurando. Probando nueva conexión con SMA en %s",
+                    user_input[CONF_HOST],
                 )
                 await validate_input(self.hass, user_input)
                 _LOGGER.info("Validación de reconfiguración exitosa.")
@@ -163,8 +164,7 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
                 errors["base"] = "cannot_connect"
             except Exception as e:
                 _LOGGER.error(
-                    f"Error desconocido en reconfiguración: {e}",
-                    exc_info=True,
+                    "Error desconocido en reconfiguración: %s", e, exc_info=True
                 )
                 errors["base"] = "unknown"
 
@@ -190,9 +190,6 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_SSL, default=data.get(CONF_SSL, True)
                 ): bool,
-                vol.Optional(
-                    CONF_MODBUS_PORT, default=data.get(CONF_MODBUS_PORT, 502)
-                ): int,
                 vol.Optional(
                     CONF_MODBUS_UNIT_ID,
                     default=data.get(CONF_MODBUS_UNIT_ID, 3),
