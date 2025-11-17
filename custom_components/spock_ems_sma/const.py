@@ -1,22 +1,29 @@
-"""Constants for the Spock EMS SMA integration."""
+from datetime import timedelta
 
-DOMAIN = "ha_spock_ems_sma"
+DOMAIN = "spock_ems_sma"
 
-# Config Keys
-CONF_SMA_IP = "sma_ip"
-CONF_SMA_PORT = "sma_port"
-CONF_SMA_UNIT_ID = "sma_unit_id"
+# --- Configuración de Polling (Telemetría SMA) ---
+SCAN_INTERVAL_SMA = timedelta(seconds=30)
 
-# Defaults
-DEFAULT_SMA_PORT = 502
-DEFAULT_SMA_UNIT_ID = 3
+# --- Configuración de la API de Spock (PUSH/PULL) ---
+SPOCK_TELEMETRY_API_ENDPOINT = "https://ems-ha.spock.es/api/ems_marstek"
+SPOCK_COMMAND_API_PATH = "/api/spock_ems_sma"
 
-# SMA Modbus Registers
-# 40149: Active Power Setpoint (Signed 32-bit) - Negativo=Carga, Positivo=Descarga
-SMA_REG_SETPOINT = 40149 
-# 40151: Control Mode (Unsigned 32-bit) - 802=Manual, 803=Auto
-SMA_REG_CONTROL_MODE = 40151
+# Claves de configuración
+CONF_SPOCK_API_TOKEN = "spock_api_token"
+CONF_PLANT_ID = "plant_id"
+CONF_GROUP = "group"
+GROUPS = ["user", "installer"]
+DEFAULT_GROUP = "installer"
 
-# SMA Control Values
-SMA_MODE_MANUAL = 802
-SMA_MODE_AUTO = 803
+# --- Parámetros Modbus para control de batería SMA ---
+# (NUEVOS)
+CONF_MODBUS_PORT = "modbus_port"         # default: 502
+CONF_MODBUS_UNIT_ID = "modbus_unit_id"   # default: 3
+
+# --- CONSTANTES DEL SWITCH MAESTRO ---
+MASTER_SWITCH_NAME = "Spock EMS SMA Control"
+MASTER_SWITCH_KEY = "master_control"
+
+# Plataformas a cargar
+PLATFORMS = ["sensor", "switch"]
