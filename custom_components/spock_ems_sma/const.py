@@ -16,10 +16,9 @@ CONF_GROUP = "group"
 GROUPS = ["user", "installer"]
 DEFAULT_GROUP = "installer"
 
-# --- Parámetros Modbus para control de batería SMA ---
-# (NUEVOS)
-CONF_MODBUS_PORT = "modbus_port"         # default: 502
-CONF_MODBUS_UNIT_ID = "modbus_unit_id"   # default: 3
+# --- NUEVO: parámetro Modbus para control de batería ---
+# Solo unit_id; el puerto se queda hardcoded a 502.
+CONF_MODBUS_UNIT_ID = "modbus_unit_id"
 
 # --- CONSTANTES DEL SWITCH MAESTRO ---
 MASTER_SWITCH_NAME = "Spock EMS SMA Control"
