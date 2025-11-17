@@ -1,24 +1,30 @@
+"""Constantes de la integración Spock EMS SMA."""
+
 from datetime import timedelta
 
 DOMAIN = "spock_ems_sma"
 
-# --- Configuración de Polling (Telemetría SMA) ---
-SCAN_INTERVAL_SMA = timedelta(seconds=30)
-
-# --- Configuración de la API de Spock (PUSH/PULL) ---
-SPOCK_TELEMETRY_API_ENDPOINT = "https://ems-ha.spock.es/api/ems_marstek" 
-SPOCK_COMMAND_API_PATH = "/api/spock_ems_sma"
-
-# Claves de configuración
-CONF_SPOCK_API_TOKEN = "spock_api_token"
+# ---------------------------------------
+# Configuración de Spock API
+# ---------------------------------------
+API_ENDPOINT = "https://api.spock.energy/v1/ems/push"
+CONF_API_TOKEN = "api_token"
 CONF_PLANT_ID = "plant_id"
-CONF_GROUP = "group"
-GROUPS = ["user", "installer"]
-DEFAULT_GROUP = "installer"
 
-# --- CONSTANTES DEL SWITCH MAESTRO ---
-MASTER_SWITCH_NAME = "Spock EMS SMA Control"
-MASTER_SWITCH_KEY = "master_control"
+# ---------------------------------------
+# Parámetros PV existentes (lectura)
+# ---------------------------------------
+CONF_PV_IP = "pv_ip"
+CONF_PV_PORT = "pv_port"
+CONF_PV_SLAVE = "pv_slave"
 
-# Plataformas a cargar
-PLATFORMS = ["sensor", "switch"]
+# ---------------------------------------
+# NUEVOS — Parámetros Modbus (control batería)
+# ---------------------------------------
+CONF_MODBUS_PORT = "modbus_port"         # default: 502
+CONF_MODBUS_UNIT_ID = "modbus_unit_id"   # default: 3
+
+# ---------------------------------------
+# Intervalo de Polling (lectura telemetría SMA)
+# ---------------------------------------
+SCAN_INTERVAL_SMA = timedelta(seconds=30)
