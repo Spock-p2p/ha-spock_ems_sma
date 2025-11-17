@@ -3,9 +3,16 @@
   "name": "Spock EMS (SMA)",
   "config_flow": true,
   "documentation": "https://github.com/Spock-p2p/ha-spock_ems_sma",
-  "requirements": ["pysma==1.0.2"],
-  "dependencies": ["http"],
-  "codeowners": ["@Spock-p2p"],
+  "requirements": [
+    "pysma==1.0.2",
+    "pymodbus>=3.0.0,<4.0.0"
+  ],
+  "dependencies": [
+    "http"
+  ],
+  "codeowners": [
+    "@Spock-p2p"
+  ],
   "iot_class": "local_polling",
-  "version": "1.0.0"
+  "version": "1.1.0"
 }
