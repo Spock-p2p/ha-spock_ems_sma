@@ -1,8 +1,6 @@
 import logging
 import voluptuous as vol
 from aiohttp import ClientError
-# import ssl (ya no se usa)
-# from aiohttp import TCPConnector (ya no se usa)
 
 from homeassistant import config_entries
 from homeassistant.const import (
@@ -27,17 +25,18 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# ----- ESQUEMA INICIAL (AL AÑADIR LA INTEGRACIÓN) -----
 DATA_SCHEMA = vol.Schema(
     {
-        # --- Spock (Primero) ---
+        # --- Spock ---
         vol.Required(CONF_PLANT_ID): str,
         vol.Required(CONF_SPOCK_API_TOKEN): str,
-        # --- SMA (Después) ---
+        # --- SMA Webconnect ---
         vol.Required(CONF_HOST): str,
         vol.Optional(CONF_GROUP, default=DEFAULT_GROUP): vol.In(GROUPS),
         vol.Required(CONF_PASSWORD): str,
         vol.Optional(CONF_SSL, default=True): bool,
-        # --- NUEVO: Unit ID Modbus ---
+        # --- Modbus (solo unit_id; puerto = 502 hardcoded) ---
         vol.Optional(CONF_MODBUS_UNIT_ID, default=3): int,
     }
 )
@@ -45,7 +44,6 @@ DATA_SCHEMA = vol.Schema(
 
 async def validate_input(hass, data: dict):
     """Valida la conexión con SMA usando pysma."""
-
     protocol = "https" if data[CONF_SSL] else "http"
     url = f"{protocol}://{data[CONF_HOST]}"
 
@@ -61,8 +59,6 @@ async def validate_input(hass, data: dict):
 
     await sma.new_session()
     device_info = await sma.device_info()
-
-    # Cerramos la sesión de validación explícitamente
     await sma.close_session()
 
     return {"title": data[CONF_HOST], "serial": device_info.serial}
@@ -85,30 +81,26 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                _LOGGER.info(
-                    "Probando conexión con SMA en %s", user_input[CONF_HOST]
-                )
+                _LOGGER.info("Probando conexión con SMA en %s", user_input[CONF_HOST])
                 info = await validate_input(self.hass, user_input)
                 _LOGGER.info(
-                    "Conexión con SMA exitosa. Serial: %s", info["serial"]
+                    "Conexión con SMA exitosa. Serial: %s",
+                    info["serial"],
                 )
 
                 await self.async_set_unique_id(info["serial"])
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
-                    title=info["title"], data=user_input
+                    title=info["title"],
+                    data=user_input,
                 )
 
             except SmaAuthenticationException:
-                _LOGGER.warning(
-                    "Falló la validación de SMA: Autenticación inválida"
-                )
+                _LOGGER.warning("Falló la validación de SMA: Autenticación inválida")
                 errors["base"] = "invalid_auth"
             except (SmaConnectionException, ClientError, TimeoutError):
-                _LOGGER.warning(
-                    "Falló la validación de SMA: No se puede conectar"
-                )
+                _LOGGER.warning("Falló la validación de SMA: No se puede conectar")
                 errors["base"] = "cannot_connect"
             except Exception as e:
                 _LOGGER.error(
@@ -117,14 +109,16 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+            step_id="user",
+            data_schema=DATA_SCHEMA,
+            errors=errors,
         )
 
 
 class SmaSpockOptionsFlow(config_entries.OptionsFlow):
     """
     Maneja el flujo de opciones (reconfiguración).
-    Esto permite al usuario editar la IP, token, etc., después de la configuración.
+    Esto permite al usuario editar IP, token, unit_id, etc.
     """
 
     def __init__(self, config_entry: config_entries.ConfigEntry):
@@ -135,8 +129,9 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
         """Maneja el paso inicial del flujo de opciones."""
         errors = {}
 
+        data = self.config_entry.data
+
         if user_input is not None:
-            # El usuario ha enviado el formulario de reconfiguración
             try:
                 _LOGGER.info(
                     "Reconfigurando. Probando nueva conexión con SMA en %s",
@@ -145,9 +140,10 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
                 await validate_input(self.hass, user_input)
                 _LOGGER.info("Validación de reconfiguración exitosa.")
 
-                # Actualizamos la configuración principal (config_entry.data)
+                # Guardamos TODO (incluyendo modbus_unit_id) en config_entry.data
                 self.hass.config_entries.async_update_entry(
-                    self.config_entry, data=user_input
+                    self.config_entry,
+                    data=user_input,
                 )
 
                 # Recargamos la integración
@@ -155,7 +151,6 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
                     self.config_entry.entry_id
                 )
 
-                # Cerramos el flujo de opciones
                 return self.async_create_entry(title="", data={})
 
             except SmaAuthenticationException:
@@ -168,16 +163,13 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
                 )
                 errors["base"] = "unknown"
 
-        # Mostrar el formulario, pre-llenado con los datos *actuales*
-        data = self.config_entry.data
         options_schema = vol.Schema(
             {
                 vol.Required(
                     CONF_PLANT_ID, default=data.get(CONF_PLANT_ID)
                 ): str,
                 vol.Required(
-                    CONF_SPOCK_API_TOKEN,
-                    default=data.get(CONF_SPOCK_API_TOKEN),
+                    CONF_SPOCK_API_TOKEN, default=data.get(CONF_SPOCK_API_TOKEN)
                 ): str,
                 vol.Required(CONF_HOST, default=data.get(CONF_HOST)): str,
                 vol.Optional(
@@ -187,9 +179,7 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(
                     CONF_PASSWORD, default=data.get(CONF_PASSWORD)
                 ): str,
-                vol.Optional(
-                    CONF_SSL, default=data.get(CONF_SSL, True)
-                ): bool,
+                vol.Optional(CONF_SSL, default=data.get(CONF_SSL, True)): bool,
                 vol.Optional(
                     CONF_MODBUS_UNIT_ID,
                     default=data.get(CONF_MODBUS_UNIT_ID, 3),
@@ -198,5 +188,7 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
         )
 
         return self.async_show_form(
-            step_id="init", data_schema=options_schema, errors=errors
+            step_id="init",
+            data_schema=options_schema,
+            errors=errors,
         )
