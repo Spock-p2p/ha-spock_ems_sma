@@ -1,8 +1,10 @@
-# Spock EMS (SMA) para Home Assistant
+# Spock EMS (SMA) Sunny Tripower - Sunny Home Manager 2.0 para Home Assistant
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
 Este es un componente personalizado (Custom Component) para **Home Assistant** que integra tu inversor solar **SMA** con el servicio de gestión de energía (EMS) de **Spock-p2p**.
+
+**Certificado para Sunny Tripower - Sunny Home Manager 2.0**
 
 Este componente está diseñado como una solución híbrida:
 
