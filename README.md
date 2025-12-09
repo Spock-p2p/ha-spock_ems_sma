@@ -10,8 +10,7 @@ Este componente está diseñado como una solución híbrida:
 
 1.  **PULL (Lectura):** Lee la telemetría local de tu inversor SMA (como el SOC de la batería, potencia FV, potencia de red, etc.) utilizando la librería `pysma` (protocolo Webconnect).
 2.  **PUSH (Envío):** Formatea estos datos y los envía (Push) a la API en la nube de Spock-p2p para su procesado.
-3.  **RECEIVE (Recepción):** Expone un *webhook* local en Home Assistant (`/api/spock_ems_sma`) para recibir comandos de control desde la nube de Spock-p2p.
-4.  **CONTROL (HA):** Crea entidades en Home Assistant (sensores y un interruptor) para que puedas monitorizar y controlar la integración directamente desde tu panel de HA.
+3.  **CONTROL (HA):** Crea entidades en Home Assistant (sensores y un interruptor) para que puedas monitorizar y controlar la integración directamente desde tu panel de HA.
 
 ## Requisitos
 
