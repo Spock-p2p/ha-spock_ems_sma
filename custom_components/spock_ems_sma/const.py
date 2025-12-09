@@ -6,8 +6,8 @@ DOMAIN = "spock_ems_sma"
 SCAN_INTERVAL_SMA = timedelta(seconds=30)
 
 # --- Configuración de la API de Spock (PUSH/PULL) ---
-SPOCK_TELEMETRY_API_ENDPOINT = "https://ems-ha.spock.es/api/ems_marstek"
-SPOCK_COMMAND_API_PATH = "/api/spock_ems_sma"
+SPOCK_TELEMETRY_API_ENDPOINT = "https://ems-ha.spock.es/api/ems_sma"
+SPOCK_COMMAND_API_PATH = "/api/ems_sma"
 
 # Claves de configuración
 CONF_SPOCK_API_TOKEN = "spock_api_token"
