@@ -125,7 +125,7 @@ class SMABatteryWriter:
           - watts > 0 significa 'cargar' X W
           - pero el registro 40149 debe recibir un valor NEGATIVO para cargar.
         """
-        if watts <= 0:
+        if watts < 0:
             _LOGGER.warning(
                 "set_charge_watts llamado con potencia no positiva (%s). Ignorando.",
                 watts,
@@ -162,7 +162,7 @@ class SMABatteryWriter:
           - watts > 0 significa 'descargar' X W
           - el registro 40149 debe recibir un valor POSITIVO para descargar.
         """
-        if watts <= 0:
+        if watts < 0:
             _LOGGER.warning(
                 "set_discharge_watts llamado con potencia no positiva (%s). Ignorando.",
                 watts,
