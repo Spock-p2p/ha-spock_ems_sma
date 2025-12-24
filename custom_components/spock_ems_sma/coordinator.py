@@ -296,7 +296,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
 
         # Modo CHARGE → consigna de carga
         if op_mode == "charge":
-            if mag <= 0:
+            if mag < 0:
                 _LOGGER.warning(
                     "Spock: operation_mode=charge pero 'action' no válido (%s). "
                     "Pasando a AUTO.",
@@ -315,7 +315,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
 
         # Modo DISCHARGE → consigna de descarga
         if op_mode == "discharge":
-            if mag <= 0:
+            if mag < 0:
                 _LOGGER.warning(
                     "Spock: operation_mode=discharge pero 'action' no válido (%s). "
                     "Pasando a AUTO.",
