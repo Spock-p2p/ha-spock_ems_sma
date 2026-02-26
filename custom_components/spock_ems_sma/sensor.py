@@ -61,31 +61,51 @@ SENSOR_MAP = {
         "state_class": SensorStateClass.MEASUREMENT,
     },
     
-    # Red (Contador) - ¡ESTOS SON LOS NUEVOS!
-    "metering_power_absorbed": {
-        "name": "SMA Potencia Red (Importación)",
+    # Red (Contador) - Potencia por fase (los totales neteados se cancelan entre fases)
+    "metering_active_power_draw_l1": {
+        "name": "SMA Red Importación L1",
         "unit": UnitOfPower.WATT,
         "device_class": SensorDeviceClass.POWER,
         "state_class": SensorStateClass.MEASUREMENT,
     },
-    "metering_power_supplied": {
-        "name": "SMA Potencia Red (Exportación)",
+    "metering_active_power_draw_l2": {
+        "name": "SMA Red Importación L2",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "metering_active_power_draw_l3": {
+        "name": "SMA Red Importación L3",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "metering_active_power_feed_l1": {
+        "name": "SMA Red Exportación L1",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "metering_active_power_feed_l2": {
+        "name": "SMA Red Exportación L2",
+        "unit": UnitOfPower.WATT,
+        "device_class": SensorDeviceClass.POWER,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "metering_active_power_feed_l3": {
+        "name": "SMA Red Exportación L3",
         "unit": UnitOfPower.WATT,
         "device_class": SensorDeviceClass.POWER,
         "state_class": SensorStateClass.MEASUREMENT,
     },
 
-    # Estado (Estaba bien)
+    # Estado
     "status": {
         "name": "SMA Estado",
         "unit": None,
         "device_class": None,
         "state_class": None,
     },
-    
-    # SENSORES ANTIGUOS ELIMINADOS (porque daban 0 o 'Desconocido'):
-    # "grid_power": ...
-    # "metering_current_consumption": ...
 }
 
 async def async_setup_entry(hass, entry, async_add_entities):

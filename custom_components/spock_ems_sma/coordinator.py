@@ -156,7 +156,7 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         al payload que espera la API de Spock.
         """
 
-        # 1. Potencia de Batería
+        # 1. Potencia de Batería (positivo = cargando, negativo = descargando)
         charge = sensors_dict.get("battery_power_charge_total", 0) or 0
         discharge = sensors_dict.get("battery_power_discharge_total", 0) or 0
         battery_power = charge - discharge
@@ -166,29 +166,37 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         pv_b = sensors_dict.get("pv_power_b", 0) or 0
         pv_power = pv_a + pv_b
 
-        # --- Lógica de red corregida (según tu petición) ---
-        # Usamos los sensores del 'metering' (contador)
-        grid_absorb = sensors_dict.get("metering_power_absorbed", 0) or 0
-        grid_supply = sensors_dict.get("metering_power_supplied", 0) or 0
+        # 3. Grid Import (suma de potencia consumida por fase)
+        #    Los sensores totales (metering_power_absorbed/supplied) dan el
+        #    neto trifásico, que se cancela entre fases. Sumamos por fase
+        #    para obtener el valor real.
+        draw_l1 = sensors_dict.get("metering_active_power_draw_l1", 0) or 0
+        draw_l2 = sensors_dict.get("metering_active_power_draw_l2", 0) or 0
+        draw_l3 = sensors_dict.get("metering_active_power_draw_l3", 0) or 0
+        grid_import = draw_l1 + draw_l2 + draw_l3
 
-        # 'ongrid_power' = valor neto (Importación - Exportación)
-        net_grid_power = grid_absorb - grid_supply
+        # 4. Grid Export (suma de potencia inyectada por fase)
+        feed_l1 = sensors_dict.get("metering_active_power_feed_l1", 0) or 0
+        feed_l2 = sensors_dict.get("metering_active_power_feed_l2", 0) or 0
+        feed_l3 = sensors_dict.get("metering_active_power_feed_l3", 0) or 0
+        grid_export = feed_l1 + feed_l2 + feed_l3
 
-        # 'total_grid_output_energy' = valor de exportación bruta
-        # (Tal como pediste, usamos 'metering_power_supplied' para esto)
-        supply_power = grid_supply
-        # --- FIN de la corrección ---
+        # 5. Load Power (consumo de la casa)
+        #    Balance energético: pv + grid_import + descarga = load + carga + grid_export
+        #    => load = pv + grid_import - grid_export - bat_power
+        load_power = pv_power + grid_import - grid_export - battery_power
 
         spock_payload = {
             "plant_id": str(self._plant_id),
             "bat_soc": to_int_str_or_none(sensors_dict.get("battery_soc_total")),
             "bat_power": to_int_str_or_none(battery_power),
             "pv_power": to_int_str_or_none(pv_power),
-            "ongrid_power": to_int_str_or_none(net_grid_power),
+            "load_power": to_int_str_or_none(load_power),
+            "grid_import_power": to_int_str_or_none(grid_import),
+            "grid_export_power": to_int_str_or_none(grid_export),
             "bat_charge_allowed": "true",
             "bat_discharge_allowed": "true",
             "bat_capacity": "0",
-            "total_grid_output_energy": to_int_str_or_none(supply_power),
         }
 
         return spock_payload
