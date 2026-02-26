@@ -73,7 +73,7 @@ class SmaSpockConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         """Obtiene el flujo de opciones para reconfigurar."""
-        return SmaSpockOptionsFlow(config_entry)
+        return SmaSpockOptionsFlow()
 
     async def async_step_user(self, user_input=None):
         """Maneja el paso de configuración inicial del usuario."""
@@ -119,11 +119,8 @@ class SmaSpockOptionsFlow(config_entries.OptionsFlow):
     """
     Maneja el flujo de opciones (reconfiguración).
     Esto permite al usuario editar IP, token, unit_id, etc.
+    self.config_entry está disponible automáticamente (HA 2024.12+).
     """
-
-    def __init__(self, config_entry: config_entries.ConfigEntry):
-        """Inicializa el flujo de opciones."""
-        self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         """Maneja el paso inicial del flujo de opciones."""
