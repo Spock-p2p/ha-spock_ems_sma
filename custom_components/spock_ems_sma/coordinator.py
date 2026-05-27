@@ -181,7 +181,15 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
         feed_l3 = sensors_dict.get("metering_active_power_feed_l3", 0) or 0
         grid_export = feed_l1 + feed_l2 + feed_l3
 
-        # 5. Load Power (consumo de la casa)
+        # 5. Red (totales del contador) para el payload a Spock
+        #    ongrid_power = absorbido - inyectado (positivo = importa, negativo = exporta)
+        #    total_grid_output_energy = potencia inyectada a red (exportación)
+        metering_absorbed = sensors_dict.get("metering_power_absorbed", 0) or 0
+        metering_supplied = sensors_dict.get("metering_power_supplied", 0) or 0
+        ongrid_power = metering_absorbed - metering_supplied
+        grid_output = metering_supplied
+
+        # 6. Load Power (consumo de la casa)
         #    Balance energético: pv + grid_import + descarga = load + carga + grid_export
         #    => load = pv + grid_import - grid_export - bat_power
         load_power = pv_power + grid_import - grid_export - battery_power
@@ -192,8 +200,8 @@ class SmaTelemetryCoordinator(DataUpdateCoordinator):
             "bat_power": to_int_str_or_none(battery_power),
             "pv_power": to_int_str_or_none(pv_power),
             "load_power": to_int_str_or_none(load_power),
-            "ongrid_power": to_int_str_or_none(grid_import),
-            "total_grid_output_energy": to_int_str_or_none(grid_export),
+            "ongrid_power": to_int_str_or_none(ongrid_power),
+            "total_grid_output_energy": to_int_str_or_none(grid_output),
             "bat_charge_allowed": "true",
             "bat_discharge_allowed": "true",
             "bat_capacity": "0",
